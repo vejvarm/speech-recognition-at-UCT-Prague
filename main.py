@@ -1,6 +1,7 @@
 # import tensorflow as tf
 import numpy as np
 from scipy.io import wavfile
+from scipy.signal import stft
 from matplotlib import pyplot as plt
 
 def plot_signal(time, signal, title=''):
@@ -45,12 +46,20 @@ def make_frames(signal, frequency, width=0.025, stride=0.01):
 
 def hamming(frame):
     """Apply Hamming window on input frame"""
-
     return 0.54 - 0.46*np.cos(2*np.pi*frame/(len(frame)-1))
 
 def make_stereo(signal):
     """Makes a stereo signal (2 channels) from mono signal"""
     return np.vstack((signal, signal)).T
+
+def short_time_ft(signal, frequency):
+    """Apply short time fourier transform directly on the input signal"""
+    return stft(signal, fs=frequency, window='hamming')
+
+def fourier_transform(frames):
+    """Apply fast fourier transform to frames of input signal"""
+    NFFT = np.shape(frames)[1]
+    return np.abs(np.fft.fft(frames,NFFT))  # TODO: not right - do it over
 
 
 if __name__ == '__main__':
@@ -77,13 +86,16 @@ if __name__ == '__main__':
     print(np.shape(frames_hamming), np.shape(frames))  # TODO: remove print
 
     # TODO: Apply Short-Time Fourier-Transform on frames to transfer them to frequency domain
+    t, f, STFT = short_time_ft(pre_emphasised_signal, frequency)
     # TODO: Filter Banks: spectrogram of the signal adjusted to fit human non-linear perception of sound (Mel-scale)
 
     plt.figure(1)
-    ax1 = plt.subplot(211)
+    ax1 = plt.subplot(311)
     plot_signal(time, signal, title='Soundwave signal from audiofile in time domain.')
-    ax2 = plt.subplot(212)
+    ax2 = plt.subplot(312)
     plot_signal(time, pre_emphasised_signal, title='Soundwave signal after applying pre-emphasis filter.')
+    ax3 = plt.subplot(313)
+    plt.pcolormesh(f, t, np.abs(STFT))
     plt.tight_layout()
 
     plt.show()
