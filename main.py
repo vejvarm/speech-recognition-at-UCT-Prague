@@ -20,7 +20,10 @@ def pre_emphasis(signal, alpha=0.95):
 
 def extract_mono(signal):
     """Extract single channel from a stereo signal waveform"""
-    return signal[:, 0]
+    try:
+        return signal[:, 0]
+    except IndexError:
+        return signal
 
 
 def make_frames(signal, frequency, width=0.025, stride=0.01):
@@ -38,9 +41,6 @@ def make_frames(signal, frequency, width=0.025, stride=0.01):
 
     frames = [signal[i * stride_len:i * stride_len + frame_len].T for i in range(n_frames)]
 
-    print(np.shape(frames))
-    print(len(frames[-1]))
-
     # last frame should be padded to same length as the other frames
     if len(frames[-1]) < frame_len:
         frames[-1] = np.pad(frames[-1], (0, frame_len - len(frames[-1])), 'constant', constant_values=0)
@@ -49,32 +49,6 @@ def make_frames(signal, frequency, width=0.025, stride=0.01):
         last_frame = None
 
     return np.vstack(frames)
-
-
-def make_frames_stolen(signal, frequency, width=0.025, stride=0.01):
-    """divide the signal into frames with specific width and stride
-
-    :param signal: time-domain signal to be divided into frames
-    :param width: the width of one frame in seconds
-    :param stride: the stride at which the frames are made in seconds
-    :return: array of individual frames
-    """
-
-    frame_length, frame_step = frequency * width, int(frequency * stride)
-    signal_length = len(signal)
-    frame_length = int(round(frame_length))
-    num_frames = int(np.ceil(
-        float(np.abs(signal_length - frame_length)) / frame_step))  # Make sure that we have at least 1 frame
-
-    pad_signal_length = num_frames * frame_step + frame_length
-    z = np.zeros((pad_signal_length - signal_length))
-    pad_signal = np.append(signal, z)  # Pad Signal to make sure that all frames have equal number of samples
-    #  without truncating any samples from the original signal
-
-    indices = np.tile(np.arange(0, frame_length), (num_frames, 1)) + np.tile(
-        np.arange(0, num_frames * frame_step, frame_step), (frame_length, 1)).T
-
-    return pad_signal[indices.astype(np.int32, copy=False)]
 
 
 def hamming(frame):
@@ -95,11 +69,11 @@ def short_time_ft(signal, frequency):
 def fourier_transform(frames):
     """Apply fast fourier transform to frames of input signal"""
     n_fft = np.shape(frames)[1]
-    return np.abs(np.fft.fft(frames, n_fft))  # TODO: not right - do it over
+    return np.fft.fft(a=frames, n=n_fft, axis=1)[:, :round(n_fft/2)]
 
 
 if __name__ == '__main__':
-    frequency, signal = wavfile.read('data/ucisedobre.wav')
+    frequency, signal = wavfile.read('data/saxophone-scale.wav')
 
     signal = extract_mono(signal)
 
@@ -110,28 +84,38 @@ if __name__ == '__main__':
     # applying pre-emphasis filter on signal
     pre_emphasised_signal = pre_emphasis(signal)
 
-    # pre-emhasized signal to frames
-    frames = make_frames(pre_emphasised_signal, frequency, width=0.025, stride=0.01)
-
-    print(np.shape(frames))  # TODO: remove print
+    # pre-emphasized signal to frames
+    frames = make_frames(pre_emphasised_signal, frequency, width=0.005, stride=0.001)
 
     # apply Hamming window on every frame
-    frames_hamming = np.array([hamming(frame) for frame in frames])  # explicit solution
+#    frames = np.array([hamming(frame) for frame in frames])  # explicit solution
     frames *= np.hamming(np.shape(frames)[1])  # using numpy implementation of hamming window
 
-    print(np.shape(frames_hamming), np.shape(frames))  # TODO: remove print
+    # apply FFT to the frames
+    frames_fft = fourier_transform(frames)
+
+    # the spectrogram is a square of the FFT
+    frames_fft_squared = np.abs(frames_fft)**2
+
+    print(np.shape(frames_fft))
+    print(np.shape(frames_fft_squared))
 
     # TODO: Apply Short-Time Fourier-Transform on frames to transfer them to frequency domain
     t, f, STFT = short_time_ft(pre_emphasised_signal, frequency)
     # TODO: Filter Banks: spectrogram of the signal adjusted to fit human non-linear perception of sound (Mel-scale)
 
     plt.figure(1)
-    ax1 = plt.subplot(311)
+    ax1 = plt.subplot(411)
     plot_signal(time, signal, title='Soundwave signal from audiofile in time domain.')
-    ax2 = plt.subplot(312)
+    ax2 = plt.subplot(412)
     plot_signal(time, pre_emphasised_signal, title='Soundwave signal after applying pre-emphasis filter.')
-    ax3 = plt.subplot(313)
-    plt.pcolormesh(f, t, np.abs(STFT))
+    ax3 = plt.subplot(413)
+    plt.pcolormesh(np.arange(np.shape(frames_fft)[0]),
+                   np.arange(np.shape(frames_fft)[1]),
+                   frames_fft_squared.T,
+                   cmap='hot')
+    ax4 = plt.subplot(414)
+    plt.pcolormesh(f, t, np.abs(STFT), cmap='hot')
     plt.tight_layout()
 
     plt.show()
@@ -139,4 +123,4 @@ if __name__ == '__main__':
     stereo_pre_emph = make_stereo(pre_emphasised_signal)
     print(np.shape(stereo_pre_emph))  # TODO: remove print
 
-#   wavfile.write('data/preempth_ucisedobre.wav', frequency, stereo_pre_emph)
+    wavfile.write('data/preempth_saxophone.wav', frequency, stereo_pre_emph)
