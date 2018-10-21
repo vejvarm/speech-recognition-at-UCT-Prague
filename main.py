@@ -119,7 +119,7 @@ if __name__ == '__main__':
     sample_rate, signal = wavfile.read('data/saxophone-scale.wav')
     signal = signal[0:int(3.5 * sample_rate)]  # TODO: Don't forget that you only take the first 3.5 sec
 
-    print(sample_rate)
+    print('fs = {}'.format(sample_rate))  # TODO: Remove print
 
     signal = extract_mono(signal)
 
@@ -131,15 +131,19 @@ if __name__ == '__main__':
     pre_emphasised_signal = pre_emphasis(signal)
 
     # pre-emphasized signal to frames
-    frames = make_frames(pre_emphasised_signal, sample_rate, width=0.005, stride=0.001)
+    frames = make_frames(pre_emphasised_signal, sample_rate, width=0.025, stride=0.01)
 
     # apply Hamming window on every frame
 #    frames = np.array([hamming(frame) for frame in frames])  # explicit solution
     frames *= np.hamming(np.shape(frames)[1])  # using numpy implementation of hamming window
 
+    print('frames: (L,R) = {}'.format(frames.shape))  # TODO: Remove print
+
     # apply FFT to the frames
     n_fft = 512
     frames_fft = fourier_transform(frames, n_fft)
+
+    print('sfft: (R,Nfft/2+1) = {}'.format(frames_fft.shape))  # TODO: Remove print
 
     # the Periodogram estimate of the power spectrum
     power_spectrum = 1/n_fft*(np.abs(frames_fft)**2)
@@ -168,13 +172,19 @@ if __name__ == '__main__':
     # calculate filterbanks (triangular filters at freqs_idxs)
     filterbanks = triangular_filterbanks(freqs_idxs)
 
+    print('fbanks: (B-2,Nfft/2+1) = {}'.format(filterbanks.shape))  # TODO: Remove print
+
     # apply individual filterbanks to each of the power spectrum frames
     log_energies = log_sum_of_filtered_frames(power_spectrum, filterbanks)
+
+    print('logE: (R,B-2) = {}'.format(log_energies.shape))  # TODO: Remove print
 
     # apply discrete fourier transform (DCT) to log_energies
 #    D = discrete_cosine_transform(log_energies)
     n_cepstr = 12
     D = dct(log_energies, type=2, axis=1, norm='ortho')[:, 1:n_cepstr+1]  # Keep 2-13
+
+    print('DCT(logE): (R,C) = {}'.format(D.shape))  # TODO: Remove print
 
     # calculate frequency and time span for the axis
     tspan = np.arange(np.shape(power_spectrum)[0]) / sample_rate*n_fft
