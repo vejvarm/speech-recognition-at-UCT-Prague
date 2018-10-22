@@ -1,6 +1,8 @@
 import numpy as np
+# noinspection PyPackageRequirements
+import soundfile as sf  # for loading OGG audio file format
 
-from scipy.io import wavfile
+from scipy.io import wavfile  # for loading WAV audio file format
 from scipy.signal import stft
 from scipy.fftpack import dct
 from matplotlib import pyplot as plt
@@ -147,6 +149,7 @@ if __name__ == '__main__':
           "------------------------------------------------")
 
     sample_rate, signal = wavfile.read('data/ucisedobre.wav')
+    # signal, sample_rate = sf.read('./data/pdtsc_142.ogg')
     signal = signal[0:int(3.5 * sample_rate)]  # TODO: Don't forget that you only take the first 3.5 sec
 
     print('fs = {} Hz'.format(sample_rate))  # TODO: Remove print
@@ -161,7 +164,9 @@ if __name__ == '__main__':
     pre_emphasised_signal = pre_emphasis(signal)
 
     # pre-emphasized signal to frames
-    frames = make_frames(pre_emphasised_signal, sample_rate, width=0.025, stride=0.01)
+    frame_width = 0.025
+    frame_stride = 0.01
+    frames = make_frames(pre_emphasised_signal, sample_rate, width=frame_width, stride=frame_stride)
 
     # apply Hamming window on every frame
 #    frames = np.array([hamming(frame) for frame in frames])  # explicit solution
@@ -231,7 +236,7 @@ if __name__ == '__main__':
     print(dD_standard[0, 0])    # TODO: Remove print
 
     # calculate frequency and time span for the axis
-    tspan = np.arange(np.shape(power_spectrum)[0])/sample_rate*n_fft
+    tspan = np.arange(np.shape(power_spectrum)[0])*frame_stride
     fspan = np.arange(np.shape(power_spectrum)[1])/n_fft*sample_rate
 
     # plot the Mel-Scale frequency filterbanks

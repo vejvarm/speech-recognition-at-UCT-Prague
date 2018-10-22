@@ -12,3 +12,9 @@
 =======
 \.idea/
 >>>>>>> Stashed changes
+
+*.ogg
+
+docs/~\$papers\.docx
+
+docs/~WRL1223\.tmp
