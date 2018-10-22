@@ -1,9 +1,9 @@
-# import tensorflow as tf
 import numpy as np
+
 from scipy.io import wavfile
 from scipy.signal import stft
-from matplotlib import pyplot as plt
 from scipy.fftpack import dct
+from matplotlib import pyplot as plt
 
 
 def plot_signal(time, signal, title=''):
@@ -27,20 +27,21 @@ def extract_mono(signal):
         return signal
 
 
-def make_frames(signal, sample_rate, width=0.025, stride=0.01):
+def make_frames(np_signal, fs, width=0.025, stride=0.01):
     """divide the time-based signal into frames with specific width and stride
-    :param signal: time-domain signal to be divided into frames
+    :param np_signal: time-domain signal to be divided into frames
+    :param fs: sample rate of the signal
     :param width: the width of one frame in seconds
     :param stride: the stride at which the frames are made in seconds
     :return: array (frame_length,n_frames) of individual frames
     """
 
-    sqn_len = len(signal)
-    frame_len = int(width * sample_rate)
-    stride_len = int(stride * sample_rate)
+    sqn_len = len(np_signal)
+    frame_len = int(width * fs)
+    stride_len = int(stride * fs)
     n_frames = np.array(np.ceil((sqn_len - frame_len) / stride_len) + 1, dtype=np.int32)
 
-    frames = [signal[i * stride_len:i * stride_len + frame_len].T for i in range(n_frames)]
+    frames = [np_signal[i * stride_len:i * stride_len + frame_len].T for i in range(n_frames)]
 
     # last frame should be padded to same length as the other frames
     if len(frames[-1]) < frame_len:
@@ -59,24 +60,26 @@ def make_stereo(signal):
     return np.vstack((signal, signal)).T
 
 
-def short_time_ft(signal, sample_rate, width=0.025, stride=0.01, n_fft=2048):
+def short_time_ft(signal, fs, width=0.025, stride=0.01, nfft=2048):
     """Apply short time fourier transform directly on the input signal"""
-    frame_len = int(width * sample_rate)
-    stride_len = int(stride * sample_rate)
-    return stft(signal, fs=sample_rate, window='hamming', nfft=n_fft, nperseg=frame_len, noverlap=stride_len)
+    frame_len = int(width * fs)
+    stride_len = int(stride * fs)
+    return stft(signal, fs=fs, window='hamming', nfft=nfft, nperseg=frame_len, noverlap=stride_len, )
 
 
-def fourier_transform(frames, n_fft=2048):
+def fourier_transform(frames, nfft=512):
     """Apply fast fourier transform to frames of a real input signal"""
-    return np.fft.rfft(a=frames, n=n_fft, axis=1)[:, :np.floor(n_fft/2 + 1).astype(np.int32)]
+    return np.fft.rfft(a=frames, n=nfft, axis=1)[:, :np.floor(nfft/2 + 1).astype(np.int32)]
 
 def mel_scale(freq_input):
     """Apply mel-scale formula on the input array of frequencies"""
     return 2595*np.log10(1 + freq_input/700)
 
+
 def inverse_mel_scale(mel_input):
     """Apply inverse operation to mel-scale formula to get frequencies from input array of mels"""
     return 700*(10**(mel_input/2595) - 1)
+
 
 def triangular_filterbanks(f_idxs):
     """Calculate triangular filterbanks at desired indices.
@@ -114,12 +117,39 @@ def discrete_cosine_transform(x):
 
     return D
 
+def standardize(inp_arr):
+    """standardize array inp_arr by subtracting mean value and dividing by standard deviation
+     of each coefficient throughout the frames
+     """
+    return np.subtract(inp_arr, np.mean(inp_arr, axis=0))/np.std(inp_arr, axis=0)
+
+
+def delta(c, N=2):
+    """calculate the Delta of the 2D cepstral array c column-wise from N surrounding frames"""
+    nrows, ncols = np.shape(c)
+    tspan = range(N, nrows-N)
+
+    dinp_arr = np.zeros((nrows-2*N, ncols))
+
+    for i in range(ncols):
+        dinp_arr[:, i] = np.array([sum(n*(c[t+n, i] - c[t-n, i]) for n in range(1, N+1))
+                                   / (2*sum(n**2 for n in range(1, N+1))) for t in tspan])
+
+    return dinp_arr
 
 if __name__ == '__main__':
-    sample_rate, signal = wavfile.read('data/saxophone-scale.wav')
+    print("----LEGEND-------------------------------------\n"
+          "R    \t ... number of frames \n"
+          "L    \t ... length of one frame (width*fs) \n"
+          "Nfft \t ... length of FFT filter \n"
+          "B    \t ... amount of anchors for mel-scale filterbanks \n"
+          "C    \t ... amount of cepstral coefficients \n"
+          "------------------------------------------------")
+
+    sample_rate, signal = wavfile.read('data/ucisedobre.wav')
     signal = signal[0:int(3.5 * sample_rate)]  # TODO: Don't forget that you only take the first 3.5 sec
 
-    print(sample_rate)
+    print('fs = {} Hz'.format(sample_rate))  # TODO: Remove print
 
     signal = extract_mono(signal)
 
@@ -131,21 +161,25 @@ if __name__ == '__main__':
     pre_emphasised_signal = pre_emphasis(signal)
 
     # pre-emphasized signal to frames
-    frames = make_frames(pre_emphasised_signal, sample_rate, width=0.005, stride=0.001)
+    frames = make_frames(pre_emphasised_signal, sample_rate, width=0.025, stride=0.01)
 
     # apply Hamming window on every frame
 #    frames = np.array([hamming(frame) for frame in frames])  # explicit solution
     frames *= np.hamming(np.shape(frames)[1])  # using numpy implementation of hamming window
 
+    print('frames: (R,L) = {}'.format(frames.shape))  # TODO: Remove print
+
     # apply FFT to the frames
     n_fft = 512
     frames_fft = fourier_transform(frames, n_fft)
+
+    print('sfft: (R,Nfft/2+1) = {}'.format(frames_fft.shape))  # TODO: Remove print
 
     # the Periodogram estimate of the power spectrum
     power_spectrum = 1/n_fft*(np.abs(frames_fft)**2)
 
     # Compact approach - Apply Short-Time Fourier-Transform directly to signal to transfer them to frequency domain
-    f, t, STFT = short_time_ft(pre_emphasised_signal, sample_rate)
+    fqc, tm, STFT = short_time_ft(pre_emphasised_signal, sample_rate)
 
     # TODO: Filter Banks: spectrogram of the signal adjusted to fit human non-linear perception of sound (Mel-scale)
     # calculate mel-scale maximum and minimum for desired frequency range
@@ -168,16 +202,36 @@ if __name__ == '__main__':
     # calculate filterbanks (triangular filters at freqs_idxs)
     filterbanks = triangular_filterbanks(freqs_idxs)
 
+    print('fbanks: (B-2,Nfft/2+1) = {}'.format(filterbanks.shape))  # TODO: Remove print
+
     # apply individual filterbanks to each of the power spectrum frames
     log_energies = log_sum_of_filtered_frames(power_spectrum, filterbanks)
 
+    print('logE: (R,B-2) = {}'.format(log_energies.shape))  # TODO: Remove print
+
     # apply discrete fourier transform (DCT) to log_energies
 #    D = discrete_cosine_transform(log_energies)
-    n_cepstr = 12
-    D = dct(log_energies, type=2, axis=1, norm='ortho')[:, 1:n_cepstr+1]  # Keep 2-13
+    n_cepstrums = 12
+    D = dct(log_energies, type=2, axis=1, norm='ortho')[:, 1:n_cepstrums+1]  # Keep 2-13
+
+    print('DCT(logE): (R,C) = {}'.format(D.shape))  # TODO: Remove print
+
+    # TODO: Calculate Delta and Delta-delta of the MFCC features to serve as features for representing dynamic changes
+    # TODO: Compare performance with and without Delta and Delta-delta used as additional features
+    # Performance comparison: https://www.computer.org/csdl/proceedings/isspit/2010/9992/00/05711789.pdf
+    dD = delta(D)
+    d2D = delta(dD)
+
+    # apply standardization to approx. 0 mean and variance of 1
+    D_standard = standardize(D)
+    dD_standard = standardize(dD)
+    d2D_standard = standardize(d2D)
+
+    print(D_standard[0:5, 0])   # TODO: Remove print
+    print(dD_standard[0, 0])    # TODO: Remove print
 
     # calculate frequency and time span for the axis
-    tspan = np.arange(np.shape(power_spectrum)[0]) / sample_rate*n_fft
+    tspan = np.arange(np.shape(power_spectrum)[0])/sample_rate*n_fft
     fspan = np.arange(np.shape(power_spectrum)[1])/n_fft*sample_rate
 
     # plot the Mel-Scale frequency filterbanks
@@ -189,21 +243,37 @@ if __name__ == '__main__':
 
     # plot the signal, pre-emphasized signal and the spectrum from STFT
     plt.figure(2)
-    ax1 = plt.subplot(411)
-    plot_signal(time, signal, title='Soundwave signal from audiofile in time domain.')
-    ax2 = plt.subplot(412)
+    ax1 = plt.subplot(311)
+    plot_signal(time, signal, title='Soundwave signal from audio-file in time domain.')
+    ax2 = plt.subplot(312)
     plot_signal(time, pre_emphasised_signal, title='Soundwave signal after applying pre-emphasis filter.')
-    ax3 = plt.subplot(413)
-    plt.pcolormesh(tspan,
-                   fspan,
-                   power_spectrum.T,
-                   cmap='rainbow')
-    ax4 = plt.subplot(414)
-    plt.pcolormesh(t, f, 1/n_fft*(np.abs(STFT)**2), cmap='rainbow')
+    ax3 = plt.subplot(313)
+    plt.pcolormesh(tspan, fspan, power_spectrum.T, cmap='rainbow')
+    plt.title('Periodogram estimate of the power spectrum.')
+    plt.xlabel('Time (s)')
+    plt.ylabel('Frequency (Hz)')
     plt.tight_layout()
 
     plt.figure(3)
-    plt.pcolormesh(D.T, cmap='rainbow')
+    plt.subplot(311)
+    plt.pcolormesh(D_standard.T, cmap='rainbow')
+    plt.title('Standardized cepstral coefficients.')
+    plt.xlabel('Frame (1)')
+    plt.ylabel('Cepstrum (1)')
+
+    plt.subplot(312)
+    plt.pcolormesh(dD_standard.T, cmap='rainbow')
+    plt.title('Standardized Delta of cepstral coefficients.')
+    plt.xlabel('Frame (1)')
+    plt.ylabel('Cepstrum (1)')
+
+    plt.subplot(313)
+    plt.pcolormesh(d2D_standard.T, cmap='rainbow')
+    plt.title('Standardized Delta-Delta of cepstral coefficients.')
+    plt.xlabel('Frame (1)')
+    plt.ylabel('Cepstrum (1)')
+
+    plt.tight_layout()
 
     plt.show()
 
