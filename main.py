@@ -216,14 +216,16 @@ if __name__ == '__main__':
 
     print('DCT(logE): (R,C) = {}'.format(D.shape))  # TODO: Remove print
 
-    # apply standardization to approx. 0 mean and 1 variance
-    D_standard = standardize(D)
-
     # TODO: Calculate Delta and Delta-delta of the MFCC features to serve as features for representing dynamic changes
     # TODO: Compare performance with and without Delta and Delta-delta used as additional features
     # Performance comparison: https://www.computer.org/csdl/proceedings/isspit/2010/9992/00/05711789.pdf
-    dD_standard = delta(D_standard)
-    d2D_standard = delta(dD_standard)
+    dD = delta(D)
+    d2D = delta(dD)
+
+    # apply standardization to approx. 0 mean and variance of 1
+    D_standard = standardize(D)
+    dD_standard = standardize(dD)
+    d2D_standard = standardize(d2D)
 
     print(D_standard[0:5, 0])   # TODO: Remove print
     print(dD_standard[0, 0])    # TODO: Remove print
@@ -261,13 +263,13 @@ if __name__ == '__main__':
 
     plt.subplot(312)
     plt.pcolormesh(dD_standard.T, cmap='rainbow')
-    plt.title('Delta of standardized cepstral coefficients.')
+    plt.title('Standardized Delta of cepstral coefficients.')
     plt.xlabel('Frame (1)')
     plt.ylabel('Cepstrum (1)')
 
     plt.subplot(313)
     plt.pcolormesh(d2D_standard.T, cmap='rainbow')
-    plt.title('Delta-Delta of standardized cepstral coefficients.')
+    plt.title('Standardized Delta-Delta of cepstral coefficients.')
     plt.xlabel('Frame (1)')
     plt.ylabel('Cepstrum (1)')
 
