@@ -11,6 +11,7 @@ class MFCC:
         :param data: list of 1d numpy arrays which represent the signal (audio)
         :param fs: sample rate of the signals in data
         :arg kwargs:
+            :param alpha: weighting coefficient of pre-emphasis filter (default: 0.95)
             :param framewidth: width of the frames that divide the data in seconds (default: 0.025)
             :param framestride: stride of the frames that divide the data in seconds (default: 0.01)
             :param fmin: starting frequency of the filterbanks (default: 300)
@@ -21,6 +22,7 @@ class MFCC:
         """
         self.data = data
         self.fs = fs                                                                     # Hz
+        self.alpha = kwargs['alpha'] if 'alpha' in kwargs else 0.95                      # 1
         self.framewidth = kwargs['framewidth'] if 'framewidth' in kwargs else 0.025      # s
         self.framestride = kwargs['framestride'] if 'framestride' in kwargs else 0.01    # s
         self.fmin = kwargs['fmin'] if 'fmin' in kwargs else 300                          # Hz
@@ -31,7 +33,7 @@ class MFCC:
 
     def transform_data(self, deltas=(0, 0)):
 
-        data = self.pre_emphasis(self.data)
+        data = self.pre_emphasis(self.data, self.alpha)
         frames = self.make_frames(data, self.fs, self.framewidth, self.framestride)
         hamminged = self.hamming(frames)
         fft = self.fourier_transform(hamminged, self.nfft)
@@ -60,8 +62,6 @@ class MFCC:
         elif deltas[1]:
             return [np.hstack((mfcc_standard[i], d2_mfcc_standard[i])) for i in range(len(mfcc))]
 
-
-
     def show_settings(self):
         attr_dict = vars(self)
         output = "fs = {} Hz\n" \
@@ -73,12 +73,13 @@ class MFCC:
                  "cepstrums = {} \n".format(*list(attr_dict.values())[1:])
         return output
 
-    def pre_emphasis(self, data, alpha=0.95):
+    @staticmethod
+    def pre_emphasis(data, alpha=0.95):
         """Applies preemphasis filter on the list of signals which boosts the high frequencies"""
         nr = len(data)
         pre_data = [np.array(0, dtype=np.float32)]*nr
 
-        for i, row in enumerate(self.data):
+        for i, row in enumerate(data):
             pre_data[i] = np.append(row[0], row[1:] - alpha * row[:-1])
 
         return pre_data
@@ -222,9 +223,11 @@ if __name__ == '__main__':
     fs = 16000
     m = MFCC(data, fs)
 
-    cepstra = m.transform_data()
-    cepstra_d = m.transform_data(deltas=(2, 0))
-    cepstra_2d = m.transform_data(deltas=(2, 2))
-    print(np.shape(cepstra[0]))
-    print(np.shape(cepstra_d[0]))
-    print(np.shape(cepstra_2d[0]))
+    print(np.shape(m.data[0]))
+
+#    cepstra = m.transform_data()
+#    cepstra_d = m.transform_data(deltas=(2, 0))
+#    cepstra_2d = m.transform_data(deltas=(2, 2))
+#    print(np.shape(cepstra[0]))
+#    print(np.shape(cepstra_d[0]))
+#    print(np.shape(cepstra_2d[0]))

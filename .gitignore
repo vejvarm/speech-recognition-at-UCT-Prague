@@ -20,3 +20,5 @@ docs/~\$papers\.docx
 docs/~WRL1223\.tmp
 
 \.pytest_cache/v/cache/
+
+*.pyc
