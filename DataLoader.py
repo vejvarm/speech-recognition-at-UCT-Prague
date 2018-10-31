@@ -1,5 +1,7 @@
-import numpy as np
 import re
+
+# from icu import LocaleData
+import numpy as np
 import soundfile as sf  # for loading OGG audio file format
 
 from bs4 import BeautifulSoup
@@ -20,17 +22,38 @@ class DataLoader:
         self.ends = [np.array(0, dtype=np.float32)]*len(self.transcripts)      # list of lists of ending times of the sentences
         self.tokens = [[]]*len(self.transcripts)    # list of lists of tokens (sentences) from transcripts
         self.labels = [[np.array(0, dtype=np.uint8)]]*len(self.transcripts)  # list of arrays which will contain numeric representations of characters
+        # self.c2n_map = {char: i for i, char in enumerate(string.alpha)}
         self.c2n_map = {'a':  0, 'á':  1, 'b':  2,  'c':  3, 'č':  4, 'd':  5, 'ď':  6, 'e':  7, 'é':  8, 'ě':  9,
                         'f': 10, 'g': 11, 'h': 12, 'ch': 13, 'i': 14, 'í': 15, 'j': 16, 'k': 17, 'l': 18, 'm': 19,
                         'n': 20, 'ň': 21, 'o': 22,  'ó': 23, 'p': 24, 'q': 25, 'r': 26, 'ř': 27, 's': 28, 'š': 29,
                         't': 30, 'ť': 31, 'u': 32,  'ú': 33, 'ů': 34, 'v': 35, 'w': 36, 'x': 37, 'y': 38, 'ý': 39,
                         'z': 40, 'ž': 41, ' ': 42}
+        self.n2c_map = {val: idx for idx, val in self.c2n_map.items()}
 
     def char2num(self, sentlist):
         """ Transform list of sentences (tokens) to list of lists with numeric representations of the
         characters depending on their position in the czech alphabet.
         """
-        return [np.array([self.c2n_map[c] for c in chars.lower()], dtype=np.uint8) for chars in sentlist]
+        arraylist = [np.asarray([self.c2n_map[c] for c in chars.lower()], dtype=np.uint8) for chars in sentlist]
+        for i in range(len(arraylist)):
+            ch_idcs = [(r.start(), r.end() - 1) for r in re.finditer('ch', sentlist[i])]
+
+            # change arraylist at ch_idcs starts to number for symbol 'ch'
+            mask_change = np.zeros(len(arraylist[i]), dtype=bool)
+            mask_change[[tup[0] for tup in ch_idcs]] = True
+            arraylist[i][mask_change] = self.c2n_map['ch']
+
+            # remove elements after added numbers for symbol 'ch'
+            mask_delete = np.ones(len(arraylist[i]), dtype=bool)
+            mask_delete[[tup[1] for tup in ch_idcs]] = False
+            arraylist[i] = arraylist[i][mask_delete]
+
+        return arraylist
+
+    def num2char(self, arraylist):
+        """ Transform list of numpy arrays with chacater numbers to list of sentences """
+
+        return [''.join([self.n2c_map[o] for o in arr]) for arr in arraylist]
 
     @staticmethod
     def extract_channel(signal, channel_number):
@@ -79,7 +102,8 @@ class PDTSCLoader(DataLoader):
             self.ends[i] = self.time2secms([end.text for end in end_time_tags if end])
 
             # process the tokens from token tags
-            regexp = r'[^A-Za-záčďéěíňóřšťúůýž]+'  # find all non alphabetic characters
+            regexp = r'[^A-Za-záčďéěíňóřšťúůýž]+'
+            regexp = r'[^A-Za-záéíóúýčďěňřšťůž{ch}]+' # find all non alphabetic characters (Czech alphabet)
             tokens = [' '.join([re.sub(regexp, '', token.text.lower()) for token in tokens])
                       for tokens in token_tags]  # joining sentences and removing special and numeric chars
             self.tokens[i] = [token for token in tokens if token]  # removing empty strings
@@ -118,9 +142,13 @@ class PDTSCLoader(DataLoader):
 if __name__ == '__main__':
     pass
 #    pdtsc = PDTSCLoader(['data/pdtsc_142.ogg'], ['data/pdtsc_142.wdata'])
+#    out = pdtsc.char2num(['chacha to je chalupa', 'achichouvej to je bolest', 'jako by se nechumelilo'])
+#    print(out)
+#    print(pdtsc.num2char(out))
 #    print(pdtsc.transcripts)
 #    print(pdtsc.char2num(['Ahoj já jsem Martin', 'To je super', 'Já taky']))
 #    pdtsc.load_transcripts()
+#    print(pdtsc.labels)
 #    pdtsc.load_audio()
 #    print(pdtsc.starts[0][0])
 #    print(pdtsc.ends[0][0])
