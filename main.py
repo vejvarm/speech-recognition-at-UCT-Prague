@@ -14,6 +14,7 @@ def plot_signal(time, signal, title=''):
     plt.ylabel('Amplitude')
     plt.grid(True, 'major')
 
+
 def main():
     pdtsc = PDTSCLoader(['data/pdtsc_142.ogg'], ['data/pdtsc_142.wdata'])
     labels = pdtsc.load_transcripts()
@@ -22,9 +23,7 @@ def main():
     mfcc = MFCC(audio[0], fs)  # TODO: make MFCC work for more audiofiles
     cepstra = mfcc.transform_data()
 
-    plt.figure(1)
-    plt.pcolormesh(cepstra[5])  # TODO: def plot_cepstra
-    plt.show()
+    mfcc.plot_cepstra(cepstra, nplots=1)
 
     # TODO: SAVE Cepstra to files (features)
 

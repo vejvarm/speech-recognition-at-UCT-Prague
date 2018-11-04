@@ -1,7 +1,7 @@
-
 import numpy as np
 
 from scipy.fftpack import dct
+from matplotlib import pyplot as plt
 
 class MFCC:
 
@@ -218,16 +218,23 @@ class MFCC:
     def standardize(self, cepstral_data):
         return [np.subtract(inp_arr, np.mean(inp_arr, axis=0)) / np.std(inp_arr, axis=0) for inp_arr in cepstral_data]
 
+    def plot_cepstra(self, cepstral_data, nplots=3):
+        """plot first nplots  mfcc from cepstral_data into nplots sepparate figures"""
+        assert isinstance(cepstral_data, list), "cepstral_data should be a list of 2d MFCC numpy arrays"
+        for i in range(nplots):
+            tspan = np.arange(np.shape(cepstral_data[i])[0]) * self.framestride
+            ncepstra = np.arange(np.shape(cepstral_data[i])[1], dtype=np.int8)
+            plt.figure(i)
+            plt.pcolormesh(tspan, ncepstra, cepstral_data[i].T, cmap='rainbow')
+            plt.title('Mel-frequency cepstral coefficients of sample no. {}'.format(i))
+            plt.xlabel('time (s)')
+            plt.ylabel('cepstral coefficients')
+        plt.show()
+
 if __name__ == '__main__':
     data = [np.random.randn(np.random.randint(3000, 5000)) for _ in range(1000)]
     fs = 16000
     m = MFCC(data, fs)
 
-    print(np.shape(m.data[0]))
-
-#    cepstra = m.transform_data()
-#    cepstra_d = m.transform_data(deltas=(2, 0))
-#    cepstra_2d = m.transform_data(deltas=(2, 2))
-#    print(np.shape(cepstra[0]))
-#    print(np.shape(cepstra_d[0]))
-#    print(np.shape(cepstra_2d[0]))
+    cepstra_2d = m.transform_data(deltas=(2, 2))
+    m.plot_cepstra(cepstra_2d, nplots=3)
