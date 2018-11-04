@@ -1,3 +1,5 @@
+import os
+
 import numpy as np
 
 from scipy.fftpack import dct
@@ -220,7 +222,8 @@ class MFCC:
 
     def plot_cepstra(self, cepstral_data, nplots=3):
         """plot first nplots  mfcc from cepstral_data into nplots sepparate figures"""
-        assert isinstance(cepstral_data, list), "cepstral_data should be a list of 2d MFCC numpy arrays"
+        assert isinstance(cepstral_data, list), "cepstral_data should be a list (of 2D MFCC numpy arrays)"
+        assert isinstance(cepstral_data[0], np.ndarray), "cepstral_data list should contain 2D MFCC numpy arrays"
         for i in range(nplots):
             tspan = np.arange(np.shape(cepstral_data[i])[0]) * self.framestride
             ncepstra = np.arange(np.shape(cepstral_data[i])[1], dtype=np.int8)
@@ -230,6 +233,28 @@ class MFCC:
             plt.xlabel('time (s)')
             plt.ylabel('cepstral coefficients')
         plt.show()
+
+    @staticmethod
+    def save_cepstra(cepstral_data, folder, exist_ok=False):
+        """save mfcc from cepstral_data list to separate .npy files into specified folder"""
+        assert isinstance(cepstral_data, list), "cepstral_data should be a list (of 2D MFCC numpy arrays)"
+        assert isinstance(cepstral_data[0], np.ndarray), "cepstral_data list should contain 2D MFCC numpy arrays"
+        try:
+            os.makedirs(folder, exist_ok=exist_ok)
+        except OSError:
+            print('Folder already exists. Please select another folder or set exist_ok to True.')
+            return
+        ndigits = len(str(len(cepstral_data)))  # n zeroes to pad the name with in order to keep the correct order
+        for i, array in enumerate(cepstral_data):
+            np.save('{0}/sample-{1:0{2}d}.npy'.format(folder, i, ndigits), array)
+
+    @staticmethod
+    def load_cepstra(folder):
+        """load mfcc from separate .npy files in specified folder to a list of 2D numpy arrays"""
+        files = [os.path.splitext(f) for f in os.listdir(folder) if os.path.isfile(os.path.join(folder, f))]
+        return [np.load(os.path.join(folder, ''.join(file)))
+                for file in files if file[-1] == '.npy']  # load only .npy files
+
 
 if __name__ == '__main__':
     data = [np.random.randn(np.random.randint(3000, 5000)) for _ in range(1000)]

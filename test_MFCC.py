@@ -1,3 +1,5 @@
+from os.path import isdir
+from shutil import rmtree
 from unittest import TestCase
 
 import numpy as np
@@ -7,8 +9,10 @@ from MFCC import MFCC
 
 class TestMFCC(TestCase):
     def setUp(self):
-        data = np.zeros((1000, 2000))
+        data = [np.random.randn(np.random.randint(3000, 5000)) for _ in range(100)]
         self.mfcc = MFCC(data, 16000)
+        self.cepstra = self.mfcc.transform_data(deltas=(2, 2))
+        self.data_temp_folder = './data/temp'
 
 
 class TestInit(TestMFCC):
@@ -25,8 +29,9 @@ class TestInit(TestMFCC):
 class TestPreEmphasis(TestMFCC):
 
     def test_shape(self):
-        pre_data = self.mfcc.pre_emphasis()
-        self.assertEqual(self.mfcc.data.shape, pre_data.shape)
+        pre_emph_data = self.mfcc.pre_emphasis(self.mfcc.data)
+        for i in range(len(self.mfcc.data)):
+            self.assertEqual(self.mfcc.data[i].shape, pre_emph_data[i].shape)
 
 
 class TestHamming(TestMFCC):
@@ -40,7 +45,8 @@ class TestHamming(TestMFCC):
         frames = self.mfcc.make_frames(data, fs, width, stride)
         hamminged_frames = self.mfcc.hamming(frames)
 
-        self.assertEqual(np.shape(frames), np.shape(hamminged_frames))
+        for i in range(len(frames)):
+            self.assertEqual(frames[i].shape, hamminged_frames[i].shape)
 
     def test_values(self):
         data = self.mfcc.data
@@ -54,3 +60,19 @@ class TestHamming(TestMFCC):
         true_hamming = frames[0] * np.hamming(np.shape(frames[0])[1])
 
         self.assertTrue((tested_hamming == true_hamming).all())
+
+
+class TestSaveLoad(TestMFCC):
+
+    def test_save_load_consistency(self):
+
+        if isdir(self.data_temp_folder):
+            print("Warning: Temp directory was not empty. The data got overwritten.")
+            rmtree(self.data_temp_folder, ignore_errors=True)
+
+        self.mfcc.save_cepstra(cepstral_data=self.cepstra, folder=self.data_temp_folder, exist_ok=True)
+
+        self.assertTrue(all([np.array_equal(c1, c2)
+                            for c1, c2 in zip(self.cepstra, self.mfcc.load_cepstra(self.data_temp_folder))]))
+
+
