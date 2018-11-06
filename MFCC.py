@@ -33,16 +33,21 @@ class MFCC:
         self.nbanks = kwargs['nbanks'] if 'nbanks' in kwargs else 26                     # 1
         self.cepstrums = kwargs['cepstrums'] if 'cepstrums' in kwargs else slice(1, 13)  # 1
 
+        # initialize containers
+        self.power_sfft = (np.asarray(0, dtype=np.float32),)          # tuple for power density of sffted frames
+        self.filterbanks = np.zeros((self.nbanks, self.nfft//2 + 1))  # filters to be applied to power_sfft
+        self.log_sum = (np.asarray(0, dtype=np.float32),)             # log10 of matmul(power_sfft, filterbanks)
+
     def transform_data(self, deltas=(0, 0)):
 
         data = self.pre_emphasis(self.data, self.alpha)
         frames = self.make_frames(data, self.fs, self.framewidth, self.framestride)
         hamminged = self.hamming(frames)
         fft = self.fourier_transform(hamminged, self.nfft)
-        power_fft = self.power_spectrum(fft)
+        power_sfft = self.power_spectrum(fft)
         freq_idxs = self.mel_scaled_frequency_range()
         triangles = self.triangular_filterbanks(freq_idxs)
-        log_sum = self.log_sum_of_filtered_frames(power_fft, triangles)
+        log_sum = self.log_sum_of_filtered_frames(power_sfft, triangles)
         mfcc = self.discrete_cosine_transform(log_sum)
         mfcc_standard = self.standardize(mfcc)
 
@@ -137,7 +142,8 @@ class MFCC:
         return fft_transformed
 
     def power_spectrum(self, framed_fft):
-        return [1 / self.nfft * (np.abs(row) ** 2) for row in framed_fft]
+        self.power_sfft = tuple(1 / self.nfft * (np.abs(row) ** 2) for row in framed_fft)
+        return self.power_sfft
 
     @staticmethod
     def mel_scale(freq_input):
@@ -168,8 +174,7 @@ class MFCC:
 
         return freqs_idxs
 
-    @staticmethod
-    def triangular_filterbanks(f_idxs):
+    def triangular_filterbanks(self, f_idxs):
         """Calculate triangular filterbanks at desired indices.
         Each filterbank starts at f_idxs(i), linearly goes to 1 at f_idxs(i+1)
         and then goes linearly back to zero at f_idxs(i+2).
@@ -186,12 +191,14 @@ class MFCC:
 
             filterbanks[i, :] = np.hstack((start, line_up, line_down[1:], end))
 
+        self.filterbanks = filterbanks
+
         return filterbanks
 
-    @staticmethod
-    def log_sum_of_filtered_frames(framed_data, filters):
+    def log_sum_of_filtered_frames(self, framed_data, filters):
         """log10 of the sum of Dot product of the frames with filters in individual rows of framed_data"""
-        return [np.log10(np.matmul(frames, filters.T)) for frames in framed_data]
+        self.log_sum = tuple(np.log10(np.matmul(frames, filters.T)) for frames in framed_data)
+        return self.log_sum
 
     def discrete_cosine_transform(self, filtered_data):
         return [dct(row, type=2, axis=1, norm='ortho')[:, self.cepstrums] for row in filtered_data]
@@ -220,18 +227,18 @@ class MFCC:
     def standardize(self, cepstral_data):
         return [np.subtract(inp_arr, np.mean(inp_arr, axis=0)) / np.std(inp_arr, axis=0) for inp_arr in cepstral_data]
 
-    def plot_cepstra(self, cepstral_data, figstart=1, nplots=3):
+    def plot_cepstra(self, cepstral_data, nplots=3):
         """plot first nplots  mfcc from cepstral_data into nplots sepparate figures"""
         assert isinstance(cepstral_data, list), "cepstral_data should be a list (of 2D MFCC numpy arrays)"
         assert isinstance(cepstral_data[0], np.ndarray), "cepstral_data list should contain 2D MFCC numpy arrays"
         for i in range(nplots):
             tspan = np.arange(np.shape(cepstral_data[i])[0]) * self.framestride
             ncepstra = np.arange(np.shape(cepstral_data[i])[1], dtype=np.int8)
-            plt.figure(figstart+i)
+            plt.figure()
             plt.pcolormesh(tspan, ncepstra, cepstral_data[i].T, cmap='rainbow')
             plt.title('Mel-frequency cepstral coefficients of sample no. {}'.format(i))
-            plt.xlabel('time (s)')
-            plt.ylabel('cepstral coefficients')
+            plt.xlabel('Time (s)')
+            plt.ylabel('Cepstral coefficients')
         plt.show()
 
     @staticmethod
