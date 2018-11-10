@@ -97,17 +97,25 @@ class PDTSCLoader(DataLoader):
             end_time_tags = [LM.find('end_time') for LM in lm_tags]
             token_tags = [LM.find_all('token') for LM in lm_tags]
 
-            # process the start times from start_time tags
-            self.starts[i] = self.time2secms([start.text for start in start_time_tags if start])
-
-            # process the ending times of sentences from end_time tags
-            self.ends[i] = self.time2secms([end.text for end in end_time_tags if end])
-
             # process the tokens from token tags
             regexp = r'[^A-Za-záéíóúýčďěňřšťůž{ch}]+'  # find all non alphabetic characters (Czech alphabet)
             tokens = [' '.join([re.sub(regexp, '', token.text.lower()) for token in tokens])
                       for tokens in token_tags]  # joining sentences and removing special and numeric chars
-            self.tokens[i] = [token for token in tokens if token]  # removing empty strings
+
+            empty_idcs = [i for i, token in enumerate(tokens) if not token]  # getting indices of empty tokens
+
+            # removing empty_idcs from starts, ends and tokens
+            start_time_tags = [tag for i, tag in enumerate(start_time_tags) if i not in empty_idcs]
+            end_time_tags = [tag for i, tag in enumerate(end_time_tags) if i not in empty_idcs]
+            tokens = [token for i, token in enumerate(tokens) if i not in empty_idcs]
+
+            # save the start times, ent times and tokens to instance variables
+            self.starts[i] = self.time2secms([start.text for start in start_time_tags])
+            self.ends[i] = self.time2secms([end.text for end in end_time_tags])
+            self.tokens[i] = tokens
+
+            assert len(self.starts[i]) == len(self.ends[i]), "start times and end times don't have the same length"
+            assert len(self.ends[i]) == len(self.tokens[i]), "there is different number of tokens than end times"
 
             # convert characters in tokens to numeric values representing their position in the czech alphabet
             self.labels[i] = self.char2num(self.tokens[i])
@@ -181,6 +189,6 @@ if __name__ == '__main__':
     print(pdtsc.labels[0][0])
 #    print(pdtsc.audio[0][0])
 #    pdtsc.save_audio('./data/test_saved.ogg', pdtsc.audio[0][1], pdtsc.fs[0])
-    pdtsc.save_labels('./data')
+    pdtsc.save_labels('./data', exist_ok=True)
 
 
