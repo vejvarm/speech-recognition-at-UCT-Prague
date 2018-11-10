@@ -1,10 +1,12 @@
 import re
+import os
 
 # from icu import LocaleData
 import numpy as np
 import soundfile as sf  # for loading OGG audio file format
 
 from bs4 import BeautifulSoup
+
 
 class DataLoader:
 
@@ -102,8 +104,7 @@ class PDTSCLoader(DataLoader):
             self.ends[i] = self.time2secms([end.text for end in end_time_tags if end])
 
             # process the tokens from token tags
-            regexp = r'[^A-Za-záčďéěíňóřšťúůýž]+'
-            regexp = r'[^A-Za-záéíóúýčďěňřšťůž{ch}]+' # find all non alphabetic characters (Czech alphabet)
+            regexp = r'[^A-Za-záéíóúýčďěňřšťůž{ch}]+'  # find all non alphabetic characters (Czech alphabet)
             tokens = [' '.join([re.sub(regexp, '', token.text.lower()) for token in tokens])
                       for tokens in token_tags]  # joining sentences and removing special and numeric chars
             self.tokens[i] = [token for token in tokens if token]  # removing empty strings
@@ -112,6 +113,30 @@ class PDTSCLoader(DataLoader):
             self.labels[i] = self.char2num(self.tokens[i])
 
         return self.labels
+
+    def save_labels(self, folder='./data/', exist_ok=False):
+        """
+        Save labels of transcripts to specified folder under folders with names equal to name of the transcrips files
+        """
+        if not self.labels[0]:
+            print('The labels have not been generated yet. Please call load_transcripts class function first.')
+            return
+
+        # get names of the loaded transcript files and use them as subfolder names
+        subfolders = tuple(os.path.splitext(os.path.basename(transcript))[0] for transcript in self.transcripts)
+
+        try:
+            for subfolder in subfolders:
+                os.makedirs(os.path.join(folder, subfolder), exist_ok=exist_ok)
+        except OSError:
+            print('Subfolders already exist. Please set exist_ok to True if you want to save into them anyway.')
+            return
+
+        for idx in range(len(self.labels)):
+            ndigits = len(str(len(self.labels[idx])))  # zeroes to pad the name with in order to keep the correct order
+            fullpath = os.path.join(folder, subfolders[idx])
+            for i, array in enumerate(self.labels[idx]):
+                np.save('{0}/transcript-{1:0{2}d}.npy'.format(fullpath, i, ndigits), array)
 
     def load_audio(self):
         for i, file in enumerate(self.audiofiles):
@@ -140,21 +165,22 @@ class PDTSCLoader(DataLoader):
 
 
 if __name__ == '__main__':
-    pass
-#    pdtsc = PDTSCLoader(['data/pdtsc_142.ogg'], ['data/pdtsc_142.wdata'])
+#    pass
+    pdtsc = PDTSCLoader(['data/pdtsc_142.ogg', 'data/pdtsc_001.ogg'], ['data/pdtsc_142.wdata', 'data/pdtsc_001.wdata'])
 #    out = pdtsc.char2num(['chacha to je chalupa', 'achichouvej to je bolest', 'jako by se nechumelilo'])
 #    print(out)
 #    print(pdtsc.num2char(out))
 #    print(pdtsc.transcripts)
 #    print(pdtsc.char2num(['Ahoj já jsem Martin', 'To je super', 'Já taky']))
-#    pdtsc.load_transcripts()
+    pdtsc.load_transcripts()
 #    print(pdtsc.labels)
 #    pdtsc.load_audio()
 #    print(pdtsc.starts[0][0])
 #    print(pdtsc.ends[0][0])
 #    print(pdtsc.tokens[0][0])
-#    print(pdtsc.labels[0][0])
+    print(pdtsc.labels[0][0])
 #    print(pdtsc.audio[0][0])
 #    pdtsc.save_audio('./data/test_saved.ogg', pdtsc.audio[0][1], pdtsc.fs[0])
+    pdtsc.save_labels('./data')
 
 
