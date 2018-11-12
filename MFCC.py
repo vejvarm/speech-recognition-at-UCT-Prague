@@ -253,14 +253,14 @@ class MFCC:
             return
         ndigits = len(str(len(cepstral_data)))  # n zeroes to pad the name with in order to keep the correct order
         for i, array in enumerate(cepstral_data):
-            np.save('{0}/sample-{1:0{2}d}.npy'.format(folder, i, ndigits), array)
+            np.save('{0}/cepstrum-{1:0{2}d}.npy'.format(folder, i, ndigits), array)
 
     @staticmethod
     def load_cepstra(folder):
         """load mfcc from separate .npy files in specified folder to a list of 2D numpy arrays"""
         files = [os.path.splitext(f) for f in os.listdir(folder) if os.path.isfile(os.path.join(folder, f))]
         return [np.load(os.path.join(folder, ''.join(file)))
-                for file in files if file[-1] == '.npy']  # load only .npy files
+                for file in files if 'cepstrum' in file[0] and file[-1] == '.npy']  # load only .npy files
 
 
 if __name__ == '__main__':

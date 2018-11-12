@@ -84,7 +84,9 @@ def samples_for_svk(sample=0, folder='./private/images/', dpi=300):
 
 
 def main():
-    pdtsc = PDTSCLoader(['data/pdtsc_142.ogg'], ['data/pdtsc_142.wdata'])
+    audiofiles = ['data/pdtsc_142.ogg']
+    transcripts = ['data/pdtsc_142.wdata']
+    pdtsc = PDTSCLoader(audiofiles, transcripts)
     labels = pdtsc.load_transcripts()
     audio, fs = pdtsc.load_audio()
 
