@@ -65,6 +65,28 @@ class DataLoader:
         except IndexError:
             return signal
 
+    @staticmethod
+    def load_labels(folder='./data'):
+        """ Load labels of transcripts from transcript-###.npy files in specified folder
+        into a list of lists of 1D numpy arrays
+        :param folder: string path leading to the folder with transcript files
+        """
+        labels = []
+        subfolders = [os.path.join(folder, subfolder) for subfolder in next(os.walk(folder))[1]]
+
+        # if there are no subfolders in the provided folder, look for the transcripts directly in folder
+        if not subfolders:
+            subfolders.append(folder)
+
+        for sub in subfolders:
+            files = [os.path.splitext(f) for f in os.listdir(sub) if
+                     os.path.isfile(os.path.join(sub, f))]
+            sublabels = [np.load(os.path.join(sub, ''.join(file)))
+                         for file in files if 'transcript' in file[0] and file[-1] == '.npy']  # load only .npy files
+            labels.append(sublabels)
+
+        return labels
+
 
 class PDTSCLoader(DataLoader):
 
