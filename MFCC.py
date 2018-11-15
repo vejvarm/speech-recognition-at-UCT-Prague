@@ -5,6 +5,7 @@ import numpy as np
 from scipy.fftpack import dct
 from matplotlib import pyplot as plt
 
+
 class MFCC:
 
     def __init__(self, data, fs, **kwargs):
@@ -257,10 +258,25 @@ class MFCC:
 
     @staticmethod
     def load_cepstra(folder):
-        """load mfcc from separate .npy files in specified folder to a list of 2D numpy arrays"""
-        files = [os.path.splitext(f) for f in os.listdir(folder) if os.path.isfile(os.path.join(folder, f))]
-        return [np.load(os.path.join(folder, ''.join(file)))
-                for file in files if 'cepstrum' in file[0] and file[-1] == '.npy']  # load only .npy files
+        """load mfcc from cepstrum-###.npy files in specified folder (or subfolders if present)
+        to a list of lists of 2D numpy arrays
+        """
+        # TODO: if the folder contains subfolders, load data from all subfolders
+        cepstra = []
+        subfolders = [os.path.join(folder, subfolder) for subfolder in next(os.walk(folder))[1]]
+
+        # if there are no subfolders in the provided folder, look for the transcripts directly in folder
+        if not subfolders:
+            subfolders.append(folder)
+
+        for sub in subfolders:
+            files = [os.path.splitext(f) for f in os.listdir(sub) if
+                     os.path.isfile(os.path.join(sub, f))]
+            subcepstra = [np.load(os.path.join(sub, ''.join(file)))
+                          for file in files if 'cepstrum' in file[0] and file[-1] == '.npy']  # load only .npy files
+            cepstra.append(subcepstra)
+
+        return cepstra
 
 
 if __name__ == '__main__':
