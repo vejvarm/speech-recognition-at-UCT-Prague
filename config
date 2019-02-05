@@ -1,0 +1,20 @@
+{
+  "best": false,
+  "debug": false,
+  "load_dir": "./data/train",
+  "save_dir": "./data/results/",
+  "do_train": true,
+
+  "random": false,
+
+  "lr": 0.001,
+  "max_epochs": 100,
+  "batch_size": 20,
+  "tt_ratio": 0.9,
+  "shuffle_seed": 42,
+
+  "num_hidden": 256,
+  "num_layers": 2,
+  "beam_width": 5,
+  "top_paths": 1
+}

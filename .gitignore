@@ -26,3 +26,7 @@ docs/~WRL1223\.tmp
 *.npy
 
 private/
+
+MNIST_data/
+
+*.wdata
