@@ -41,7 +41,7 @@ def plot_logsum(framespan, nbanks, logsum, title=''):
 
 
 def samples_for_svk(sample=0, folder='./private/images/', dpi=300):
-    pdtsc = PDTSCLoader(['data/pdtsc_142.ogg'], ['data/pdtsc_142.wdata'])
+    pdtsc = PDTSCLoader(['data/pdtsc_003.ogg'], ['data/pdtsc_003.wdata'])
     labels = pdtsc.load_transcripts()
     audio, fs = pdtsc.load_audio()
 
@@ -81,6 +81,11 @@ def samples_for_svk(sample=0, folder='./private/images/', dpi=300):
     mfcc.plot_cepstra(cepstra, nplots=1)
     plt.savefig(folder + 'mfcc.png', dpi=dpi)  # save the figure
 
+    print('transcript: ' + pdtsc.tokens[0][sample])
+    print('labels: {}'.format(labels[0][sample]))
+
+    plt.show()
+
 
 
 def main():
@@ -106,5 +111,5 @@ def main():
 #                for c1, c2 in zip(cepstra, cepstra2)]), 'Loaded data are not consistent with the saved data'
 
 if __name__ == '__main__':
-    main()
-    # samples_for_svk()
+    # main()
+    samples_for_svk(sample=3)

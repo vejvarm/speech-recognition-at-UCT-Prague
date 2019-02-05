@@ -240,7 +240,7 @@ class MFCC:
             plt.title('Mel-frequency cepstral coefficients of sample no. {}'.format(i))
             plt.xlabel('Time (s)')
             plt.ylabel('Cepstral coefficients')
-        plt.show()
+
 
     @staticmethod
     def save_cepstra(cepstral_data, folder, exist_ok=False):
@@ -261,7 +261,7 @@ class MFCC:
         """load mfcc from cepstrum-###.npy files in specified folder (or subfolders if present)
         to a list of lists of 2D numpy arrays
         """
-        # TODO: if the folder contains subfolders, load data from all subfolders
+        # if the folder contains subfolders, load data from all subfolders
         cepstra = []
         subfolders = [os.path.join(folder, subfolder) for subfolder in next(os.walk(folder))[1]]
 
