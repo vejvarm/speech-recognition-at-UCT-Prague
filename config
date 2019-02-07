@@ -1,9 +1,11 @@
 {
   "best": false,
   "debug": false,
-  "load_dir": "./data/train",
-  "save_dir": "./data/results/",
+  "load_dir": "D:/!private/Lord/Git/speech_recognition/data/train",
+  "save_dir": "D:/!private/Lord/Git/speech_recognition/data/results",
   "do_train": true,
+
+  "num_cpu_cores": 4,
 
   "random": false,
 
