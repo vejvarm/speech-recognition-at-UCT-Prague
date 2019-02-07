@@ -9,7 +9,7 @@ import json
 import numpy as np
 import tensorflow as tf
 
-from helpers import check_equal, random_shuffle, load_config, list_to_padded_array
+from helpers import check_equal, random_shuffle, load_config, gen_data
 from MFCC import MFCC
 from DataLoader import DataLoader
 load_cepstra = MFCC.load_cepstra  # for loading  cepstrum-###.npy files from a folder into a list of lists
@@ -44,15 +44,22 @@ class AcousticModel(object):
         self.load_dir = self.config['load_dir']  # directory from which to load MFCC data (works with nested dirs)
         self.save_dir = self.config['save_dir']  # directory in which to save the checkpoints and results
         self.do_train = self.config['do_train']  # if True, training will be commenced, else inference will be commenced
+        self.num_cpu_cores = self.config['num_cpu_cores']  # number of CPU cores to use for parallelization
 
         # Data-inferred parameters (check load_data())#
         self.num_data = None       # total number of individual data in the loaded dataset
         self.max_time = None       # maximal time unrolling of the BiRNN
         self.num_features = None   # number of features in the loaded MFCC cepstra
-        self.x_train = None        # training cepstra [numpy array] (batch_size, max_time_length, num_features)
-        self.y_train = None        # training labels [numpy array] (batch_size, max_transcript_length)
-        self.x_test = None         # testing cepstra [numpy array] (batch_size, max_time_length, num_features)
-        self.y_test = None         # testing labels [numpy array] (batch_size, max_transcript_length)
+#        self.x_train = None        # training cepstra [list of numpy arrays] (batch_size, time_length, num_features)
+#        self.y_train = None        # training labels [list of numpy arrays] (batch_size, transcript_length)
+#        self.x_test = None         # testing cepstra [list of numpy arrays] (batch_size, time_length, num_features)
+#        self.y_test = None         # testing labels [list of numpy arrays] (batch_size, transcript_length)
+        self.ds_train = None       # tf.Dataset object with elements of training data with components (cepstrum, label)
+        self.ds_test = None        # tf.Dataset object with elements of testing data with components (cepstrum, label)
+#        self.gen_train = None      # training data generator: yield (cepstrum [nparray], label [nparray])
+#        self.gen_test = None       # testing data generator: yield (cepstrum [nparray], label [nparray])
+        self.inputs_train = None   # dictionary with the outputs from batched training dataset iterators
+        self.inputs_test = None    # dictionary with the outputs from batched testing dataset iterators
 
         # HyperParameters (HP) #
         if config['random']:  # TODO: The missing (None) params will be configured randomly
@@ -91,8 +98,10 @@ class AcousticModel(object):
         # self.sess = tf.Session(config=sess_config, graph=self.graph)
         # self.sw = tf.summary.FileWriter(self.save_dir, self.sess.graph)
 
-        # TODO: load_data()
+        # load_data()
         self.load_data()
+        # prepare data
+        self.prepare_data()
         # TODO: learn_from_epoch()
 
         # TODO: train(), infer()
@@ -102,7 +111,16 @@ class AcousticModel(object):
         #    self.infer()
 
     def load_data(self):
-        """load cepstra and labels from load_dir and split them into training and testing datasets randomly"""
+        """ load cepstra and labels from load_dir, shuffle them and split them into training and testing datasets
+        :ivar self.ds_train (tf.data.Dataset object)
+        :ivar self.ds_test (tf.data.Dataset object)
+
+        Structure of the elements in instance variables self.ds_train and self.ds_test:
+            (cepstrum, label, max_time_cepstrum, length_label)
+
+        :return None
+
+        """
         cepstra = load_cepstra(self.load_dir)
         labels = load_labels(self.load_dir)
 
@@ -110,9 +128,9 @@ class AcousticModel(object):
         assert cepstra[0][0].dtype == np.float64, 'cepstra should be a list of lists with np arrays of dtype float64'
         assert labels[0][0].dtype == np.uint8, 'labels should be a list of lists with np arrays of dtype uint8'
 
-        # flatten the lists into tuples of length (sum(n_files for n_files in subfolders))
-        cepstra = tuple(item for sublist in cepstra for item in sublist)
-        labels = tuple(item for sublist in labels for item in sublist)
+        # flatten the lists to length (sum(n_files for n_files in subfolders))
+        cepstra = [item for sublist in cepstra for item in sublist]
+        labels = [item for sublist in labels for item in sublist]
 
         # get the total number of data loaded
         self.num_data = len(cepstra)
@@ -128,39 +146,97 @@ class AcousticModel(object):
         # shuffle cepstra and labels the same way so that they are still aligned
         cepstra, labels = random_shuffle(cepstra, labels, self.shuffle_seed)
 
-        # split cepstra and labels into traning and testing parts and convert them to padded numpy arrays
+        # split cepstra and labels into traning and testing parts
         len_train = int(self.tt_ratio*self.num_data)  # length of the training data
         len_test = self.num_data - int(self.tt_ratio*self.num_data)  # length of the testing data
         slice_train = slice(0, len_train)  # training part of the data
         slice_test = slice(len_train, None)  # testing part of the data
-        self.x_train = list_to_padded_array(cepstra[slice_train])  # padded to the max time length
-        self.y_train = list_to_padded_array(labels[slice_train])   # padded to the max transcript length
-        self.x_test = list_to_padded_array(cepstra[slice_test])    # padded to the max time length
-        self.y_test = list_to_padded_array(labels[slice_test])     # padded to the max transcript length
+        x_train = cepstra[slice_train]
+        y_train = labels[slice_train]
+        x_test = cepstra[slice_test]
+        y_test = labels[slice_test]
 
+        # create tf Dataset objects from the training and testing data
+        data_types = (tf.float64, tf.uint8)
+        data_shapes = (tf.TensorShape([None, self.num_features]), tf.TensorShape([None]))
+
+        ds_train = tf.data.Dataset.from_generator(lambda: zip(x_train, y_train),
+                                                  data_types,
+                                                  data_shapes
+                                                  )
+        ds_test = tf.data.Dataset.from_generator(lambda: zip(x_test, y_test),
+                                                 data_types,
+                                                 data_shapes
+                                                 )
+
+        # create two more components which contain the sizes of the cepstra and labels
+        self.ds_train = ds_train.map(lambda x, y: (x, y, tf.shape(x)[0], tf.size(y)),
+                                     num_parallel_calls=self.num_cpu_cores)
+        self.ds_test = ds_test.map(lambda x, y: (x, y, tf.shape(x)[0], tf.size(y)),
+                                   num_parallel_calls=self.num_cpu_cores)
+
+    def prepare_data(self):
+        """Prepare datasets for iteration through the model
+
+        :ivar self.inputs_train
+        :ivar self.inputs_test
+
+        :return None
+
+        """
+
+        # combine the elements in datasets into batches of padded components
+        padded_shapes = (tf.TensorShape([self.max_time, self.num_features]),  # cepstra padded to self.max_time
+                         tf.TensorShape([None]),                              # labels padded to max length in batch
+                         tf.TensorShape([]),                                  # sizes not padded
+                         tf.TensorShape([]))                                  # sizes not padded
+        padding_values = (tf.constant(0.0, dtype=tf.float64),                    # cepstra padded with 0
+                          tf.constant(DataLoader.c2n_map[' '], dtype=tf.uint8),  # labels padded with blank
+                          0,                                                     # size(cepstrum) -- unused
+                          0)                                                     # size(label) -- unused
+
+        ds_train = self.ds_train.padded_batch(self.batch_size, padded_shapes, padding_values).prefetch(1)
+        ds_test = self.ds_test.padded_batch(self.batch_size, padded_shapes, padding_values).prefetch(1)
+
+        # make initialisable iterator over the dataset which will return the batches of (x, y, size_x, size_y)
+        iterator_train = ds_train.make_initializable_iterator()
+        iterator_test = ds_test.make_initializable_iterator()
+        x_train, y_train, size_x_train, size_y_train = iterator_train.get_next()
+        x_test, y_test, size_x_test, size_y_test = iterator_test.get_next()
+
+        iterator_train_init = iterator_train.initializer
+        iterator_test_init = iterator_test.initializer
+
+        # Build instance dictionaries with the iterator data and operations
+        self.inputs_train = {"x": x_train,
+                             "y": y_train,
+                             "size_x": size_x_train,
+                             "size_y": size_y_train,
+                             "iterator_init": iterator_train_init}
+
+        self.inputs_test = {"x": x_test,
+                            "y": y_test,
+                            "size_x": size_x_test,
+                            "size_y": size_y_test,
+                            "iterator_init": iterator_test_init}
 
     def lstm_cell(self):
         return tf.nn.rnn_cell.LSTMCell(num_units=self.num_hidden, state_is_tuple=True)
 
     def build_graph(self):
         # TODO: inputs and labels
-        x_placeholder = tf.placeholder(tf.float32, (None, None, self.num_features))
-        y_placeholder = tf.placeholder(tf.uint8, (None, None))
+        # x_placeholder = tf.placeholder(tf.float32, (None, None, self.num_features))
+        # y_placeholder = tf.placeholder(tf.uint8, (None, None))
 
-        # create tf.data.Dataset object from placeholders
-        dataset = tf.data.Dataset.from_tensor_slices((x_placeholder, y_placeholder))
-        dataset = dataset.batch(self.batch_size)  # divide data into batches
-
-        # make initialisable iterator over the dataset which will return the batches of x and y
-        iterator = dataset.make_initializable_iterator()
-        data_x, data_y = iterator.get_next()  # TODO: Feed data_x and data_y to the model
 
 
         # TODO: BiRNN with LSTM cells
         cells_fw = [self.lstm_cell() for _ in range(self.num_layers)]  # forward direction LSTM cells
         cells_bw = [self.lstm_cell() for _ in range(self.num_layers)]  # backward direction LSTM cells
-        outputs, states = tf.nn.bidirectional_dynamic_rnn(cells_fw, cells_bw, )
-
+        outputs, states = tf.nn.bidirectional_dynamic_rnn(cells_fw,
+                                                          cells_bw,
+                                                          sequence_length=self.inputs_train["size_x"])  # TODO: placeholder?
+        # tf.nn.batch_normalization()
         # TODO: Batch Normalization at BLSTM inputs/outputs
         # TODO: FC layers at every timestep output W(num_classes, num_hidden) -> (num_classes, 1) at every timestep
         # TODO: ReLU at every FC output
