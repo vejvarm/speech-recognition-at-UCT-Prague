@@ -9,6 +9,12 @@ from bs4 import BeautifulSoup
 
 
 class DataLoader:
+    c2n_map = {'a': 0, 'á': 1, 'b': 2, 'c': 3, 'č': 4, 'd': 5, 'ď': 6, 'e': 7, 'é': 8, 'ě': 9,
+               'f': 10, 'g': 11, 'h': 12, 'ch': 13, 'i': 14, 'í': 15, 'j': 16, 'k': 17, 'l': 18, 'm': 19,
+               'n': 20, 'ň': 21, 'o': 22, 'ó': 23, 'p': 24, 'q': 25, 'r': 26, 'ř': 27, 's': 28, 'š': 29,
+               't': 30, 'ť': 31, 'u': 32, 'ú': 33, 'ů': 34, 'v': 35, 'w': 36, 'x': 37, 'y': 38, 'ý': 39,
+               'z': 40, 'ž': 41, ' ': 42}
+    n2c_map = {val: idx for idx, val in c2n_map.items()}
 
     def __init__(self, audiofiles, transcripts):
         """ Initialize DataLoader() object
@@ -25,12 +31,6 @@ class DataLoader:
         self.tokens = [[]]*len(self.transcripts)    # list of lists of tokens (sentences) from transcripts
         self.labels = [[np.array(0, dtype=np.uint8)]]*len(self.transcripts)  # list of arrays which will contain numeric representations of characters
         # self.c2n_map = {char: i for i, char in enumerate(string.alpha)}
-        self.c2n_map = {'a':  0, 'á':  1, 'b':  2,  'c':  3, 'č':  4, 'd':  5, 'ď':  6, 'e':  7, 'é':  8, 'ě':  9,
-                        'f': 10, 'g': 11, 'h': 12, 'ch': 13, 'i': 14, 'í': 15, 'j': 16, 'k': 17, 'l': 18, 'm': 19,
-                        'n': 20, 'ň': 21, 'o': 22,  'ó': 23, 'p': 24, 'q': 25, 'r': 26, 'ř': 27, 's': 28, 'š': 29,
-                        't': 30, 'ť': 31, 'u': 32,  'ú': 33, 'ů': 34, 'v': 35, 'w': 36, 'x': 37, 'y': 38, 'ý': 39,
-                        'z': 40, 'ž': 41, ' ': 42}
-        self.n2c_map = {val: idx for idx, val in self.c2n_map.items()}
 
     def char2num(self, sentlist):
         """ Transform list of sentences (tokens) to list of lists with numeric representations of the
