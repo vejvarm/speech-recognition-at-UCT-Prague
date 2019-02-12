@@ -12,11 +12,10 @@
   "lr": 0.001,
   "max_epochs": 100,
   "batch_size": 20,
-  "tt_ratio": 0.9,
+  "tt_ratio": 0.8,
   "shuffle_seed": 42,
 
-  "num_hidden": 256,
-  "num_layers": 2,
+  "num_hidden": [256, 256],
   "beam_width": 5,
   "top_paths": 1
 }

@@ -9,7 +9,7 @@ import json
 import numpy as np
 import tensorflow as tf
 
-from helpers import check_equal, random_shuffle, load_config, gen_data
+from helpers import check_equal, random_shuffle, load_config
 from MFCC import MFCC
 from DataLoader import DataLoader
 load_cepstra = MFCC.load_cepstra  # for loading  cepstrum-###.npy files from a folder into a list of lists
@@ -58,10 +58,11 @@ class AcousticModel(object):
         self.ds_test = None        # tf.Dataset object with elements of testing data with components (cepstrum, label)
 #        self.gen_train = None      # training data generator: yield (cepstrum [nparray], label [nparray])
 #        self.gen_test = None       # testing data generator: yield (cepstrum [nparray], label [nparray])
-        self.inputs_train = None   # dictionary with the outputs from batched training dataset iterators
-        self.inputs_test = None    # dictionary with the outputs from batched testing dataset iterators
+        self.inputs = None          # dictionary with the outputs from batched dataset iterators
 
         # HyperParameters (HP) #
+        # size of the alphabet in DataLoader
+        self.alphabet_size = len(DataLoader.c2n_map)  # number of characters in the alphabet of transcripts
         if config['random']:  # TODO: The missing (None) params will be configured randomly
             pass  # TODO: random_config() for generating random configurations of the hyperparams
         else:
@@ -74,23 +75,14 @@ class AcousticModel(object):
 
             # AcousticModel specific HP
             self.num_hidden = self.config['num_hidden']   # number of hidden units in LSTM cells
-            self.num_layers = self.config['num_layers']   # number of stacked layers of LSTM cells in BiRNN
+            # TODO: make num_hidden into list (length of the list will serve as num_layers)
+#            self.num_layers = self.config['num_layers']   # number of stacked layers of LSTM cells in BiRNN
             self.beam_width = self.config['beam_width']   # beam width for the Beam Search (BS) algorithm
             self.top_paths = self.config['top_paths']     # number of best paths to return from the BS algorithm
 
         # TODO: Set properties/hyperparams function (overriding the 'config' dictionary)
 
         # TODO: save_configuration()
-
-        # TODO: build_graph()
-        # self.graph = self.build_graph()
-
-        # Any operations that should be in the graph but are common to all models
-        # can be added this way, here
-        # with self.graph.as_default():
-        #     self.saver = tf.train.Saver(
-        #         max_to_keep=50,
-        #     )
 
         # Add all the other common code for the initialization here
         gpu_options = tf.GPUOptions(allow_growth=True)
@@ -102,6 +94,17 @@ class AcousticModel(object):
         self.load_data()
         # prepare data
         self.prepare_data()
+
+        # TODO: build_graph()
+        self.graph = self.build_graph()
+
+        # Any operations that should be in the graph but are common to all models
+        # can be added this way, here
+        # with self.graph.as_default():
+        #     self.saver = tf.train.Saver(
+        #         max_to_keep=50,
+        #     )
+
         # TODO: learn_from_epoch()
 
         # TODO: train(), infer()
@@ -199,45 +202,72 @@ class AcousticModel(object):
         ds_test = self.ds_test.padded_batch(self.batch_size, padded_shapes, padding_values).prefetch(1)
 
         # make initialisable iterator over the dataset which will return the batches of (x, y, size_x, size_y)
-        iterator_train = ds_train.make_initializable_iterator()
-        iterator_test = ds_test.make_initializable_iterator()
-        x_train, y_train, size_x_train, size_y_train = iterator_train.get_next()
-        x_test, y_test, size_x_test, size_y_test = iterator_test.get_next()
+        iterator = tf.data.Iterator.from_structure(ds_train.output_types, ds_train.output_shapes)
+        x, y, size_x, size_y = iterator.get_next()
 
-        iterator_train_init = iterator_train.initializer
-        iterator_test_init = iterator_test.initializer
+        # make initializers over the training and testing datasets
+        iterator_train_init = iterator.make_initializer(ds_train)
+        iterator_test_init = iterator.make_initializer(ds_test)
 
-        # Build instance dictionaries with the iterator data and operations
-        self.inputs_train = {"x": x_train,
-                             "y": y_train,
-                             "size_x": size_x_train,
-                             "size_y": size_y_train,
-                             "iterator_init": iterator_train_init}
+        # Build instance dictionary with the iterator data and operations
+        self.inputs = {"x": x,
+                       "y": y,
+                       "size_x": size_x,
+                       "size_y": size_y,
+                       "init_train": iterator_train_init,
+                       "init_test": iterator_test_init}
 
-        self.inputs_test = {"x": x_test,
-                            "y": y_test,
-                            "size_x": size_x_test,
-                            "size_y": size_y_test,
-                            "iterator_init": iterator_test_init}
-
-    def lstm_cell(self):
-        return tf.nn.rnn_cell.LSTMCell(num_units=self.num_hidden, state_is_tuple=True)
+    @staticmethod
+    def lstm_cell(num_hidden):
+        # TODO: try to use tf.contrib.cudnn_rnn.CudnnLSTM(num_units=self.num_hidden, state_is_tuple=True)
+        # TODO: Batch Normalization at LSTM outputs (before the activation function)
+        return tf.nn.rnn_cell.LSTMCell(num_units=num_hidden, state_is_tuple=True, activation='tanh')
 
     def build_graph(self):
         # TODO: inputs and labels
         # x_placeholder = tf.placeholder(tf.float32, (None, None, self.num_features))
         # y_placeholder = tf.placeholder(tf.uint8, (None, None))
 
+        # 1st layer: stacked BiRNN with LSTM cells
+        # TODO: consider using tf.contrib.rnn.stack_bidirectional_dynamic_rnn
+        cells_fw = tf.nn.rnn_cell.MultiRNNCell([self.lstm_cell(n) for n in self.num_hidden])  # forward stacked cells
+        cells_bw = tf.nn.rnn_cell.MultiRNNCell([self.lstm_cell(n) for n in self.num_hidden])  # backward stacked cells
+        rnn_outputs, rnn_states = tf.nn.bidirectional_dynamic_rnn(cells_fw,
+                                                                  cells_bw,
+                                                                  inputs=self.inputs["x"],
+                                                                  sequence_length=self.inputs["size_x"],
+                                                                  dtype=tf.float64)
+
+        # rnn_outputs == tuple(output_fw, output_bw) ... output_fw == [batch_size, max_time, num_hidden]
+
+        # add the fw and bw outputs together into one tensor
+        rnn_outputs = tf.add(rnn_outputs[0], rnn_outputs[1])
+
+        # Reshape output from a tensor of shape [batch_size, max_time, num_hidden]
+        # to a tensor of shape [batch_size*max_time, num_hidden]
+        rnn_outputs = tf.reshape(rnn_outputs, [-1, self.num_hidden[-1]])
+
+        # 2nd layer: linear projection of outputs from BiRNN
+        # define weights and biases for linear projection of outputs from BiRNN
+        logit_size = self.alphabet_size + 1  # +1 for the blank
+        lp_weights = tf.Variable(tf.random.normal([self.num_hidden[-1], logit_size], dtype=tf.float64))
+        lp_biases = tf.Variable(tf.random.normal([logit_size], dtype=tf.float64))
+
+        # convert rnn_outputs into logits (apply linear projection of rnn outputs)
+        # lp_outputs.shape == [batch_size*max_time, alphabet_size + 1]
+        lp_outputs = tf.nn.relu(tf.add(tf.matmul(rnn_outputs, lp_weights), lp_biases))
+
+        # reshape lp_outputs to shape [batch_size, max_time, alphabet_size + 1]
+        logits = tf.reshape(lp_outputs, [self.batch_size, self.max_time, logit_size])
+
+        # calculate ctc loss of logits
+        # TODO: create separate function for this
+        self.total_loss = tf.nn.ctc_loss(labels=self.inputs["y"], inputs=logits, sequence_length=self.inputs["size_x"])
+        # !!!TypeError: Expected labels (first argument) to be a SparseTensor
 
 
-        # TODO: BiRNN with LSTM cells
-        cells_fw = [self.lstm_cell() for _ in range(self.num_layers)]  # forward direction LSTM cells
-        cells_bw = [self.lstm_cell() for _ in range(self.num_layers)]  # backward direction LSTM cells
-        outputs, states = tf.nn.bidirectional_dynamic_rnn(cells_fw,
-                                                          cells_bw,
-                                                          sequence_length=self.inputs_train["size_x"])  # TODO: placeholder?
         # tf.nn.batch_normalization()
-        # TODO: Batch Normalization at BLSTM inputs/outputs
+        # TODO: add rnn.DropoutWrapper
         # TODO: FC layers at every timestep output W(num_classes, num_hidden) -> (num_classes, 1) at every timestep
         # TODO: ReLU at every FC output
         # TODO: ctc_beam_search_decoder -> outputs (only for validation and inference)

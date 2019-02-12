@@ -14,30 +14,49 @@ class TestAcousticModel(TestCase):
 class TestData(TestAcousticModel):
 
     def test_prepare_data(self):
+
+        count_train = 0
+        count_test = 0
+
         # check if inputs :ivars are dictionaries
-        self.assertIsInstance(self.ac_model.inputs_train, dict)
-        self.assertIsInstance(self.ac_model.inputs_test, dict)
+        self.assertIsInstance(self.ac_model.inputs, dict)
 
-        # check if all the keys are present in inputs_train dict
-        self.assertIn("x", self.ac_model.inputs_train)
-        self.assertIn("y", self.ac_model.inputs_train)
-        self.assertIn("size_x", self.ac_model.inputs_train)
-        self.assertIn("size_y", self.ac_model.inputs_train)
-        self.assertIn("iterator_init", self.ac_model.inputs_train)
+        # check if all the keys are present in inputs dict
+        self.assertIn("x", self.ac_model.inputs)
+        self.assertIn("y", self.ac_model.inputs)
+        self.assertIn("size_x", self.ac_model.inputs)
+        self.assertIn("size_y", self.ac_model.inputs)
+        self.assertIn("init_train", self.ac_model.inputs)
+        self.assertIn("init_test", self.ac_model.inputs)
 
-        # check if all the keys are present in inputs_train dict
-        self.assertIn("x", self.ac_model.inputs_test)
-        self.assertIn("y", self.ac_model.inputs_test)
-        self.assertIn("size_x", self.ac_model.inputs_test)
-        self.assertIn("size_y", self.ac_model.inputs_test)
-        self.assertIn("iterator_init", self.ac_model.inputs_test)
-
-        outputs = (self.ac_model.inputs_train["x"],
-                   self.ac_model.inputs_train["y"],
-                   self.ac_model.inputs_train["size_x"],
-                   self.ac_model.inputs_train["size_y"])
+        outputs = (self.ac_model.inputs["x"],
+                   self.ac_model.inputs["y"],
+                   self.ac_model.inputs["size_x"],
+                   self.ac_model.inputs["size_y"])
 
         with tf.Session() as sess:
-            sess.run(self.ac_model.inputs_train["iterator_init"])
-            x, y, size_x, size_y = sess.run(outputs)
-            print(x, y, size_x, size_y)
+            # training dataset
+            sess.run(self.ac_model.inputs["init_train"])
+            try:
+                while True:
+                    x, y, size_x, size_y = sess.run(outputs)
+                    count_train += 1
+                    if count_train % 10 == 0:
+                        print("___TRAINING BATCH no. {}___\n".format(count_train), x, y, size_x, size_y)
+            except tf.errors.OutOfRangeError:
+                pass
+
+            # testing dataset
+            sess.run(self.ac_model.inputs["init_test"])
+            try:
+                while True:
+                    x, y, size_x, size_y = sess.run(outputs)
+                    count_test += 1
+                    if count_test % 10 == 0:
+                        print("___TESTING BATCH no. {}___\n".format(count_test), x, y, size_x, size_y)
+
+            except tf.errors.OutOfRangeError:
+                pass
+
+        print("Number of train batches: %u", count_train)
+        print("Number of test batches: %u", count_test)
