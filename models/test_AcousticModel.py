@@ -60,3 +60,25 @@ class TestData(TestAcousticModel):
 
         print("Number of train batches: %u", count_train)
         print("Number of test batches: %u", count_test)
+
+    def test_build_graph(self):
+
+        total_loss = 0
+        count_train = 0
+        count_test = 0
+
+        with tf.Session() as sess:
+            # training dataset
+            sess.run(tf.global_variables_initializer())
+            sess.run(self.ac_model.inputs["init_train"])
+            try:
+                while True:
+                    output = sess.run(self.ac_model.outputs["ctc_output"])
+                    total_loss += 0
+                    count_train += 1
+                    if count_train % 10 == 0:
+                        print("___TRAINING BATCH no. {}___\n".format(count_train), output, 0)
+            except tf.errors.OutOfRangeError:
+                pass
+
+

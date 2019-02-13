@@ -59,6 +59,7 @@ class AcousticModel(object):
 #        self.gen_train = None      # training data generator: yield (cepstrum [nparray], label [nparray])
 #        self.gen_test = None       # testing data generator: yield (cepstrum [nparray], label [nparray])
         self.inputs = None          # dictionary with the outputs from batched dataset iterators
+        self.outputs = None         # dictionary with outputs from the model
 
         # HyperParameters (HP) #
         # size of the alphabet in DataLoader
@@ -160,7 +161,7 @@ class AcousticModel(object):
         y_test = labels[slice_test]
 
         # create tf Dataset objects from the training and testing data
-        data_types = (tf.float64, tf.uint8)
+        data_types = (tf.float32, tf.int32)
         data_shapes = (tf.TensorShape([None, self.num_features]), tf.TensorShape([None]))
 
         ds_train = tf.data.Dataset.from_generator(lambda: zip(x_train, y_train),
@@ -193,13 +194,17 @@ class AcousticModel(object):
                          tf.TensorShape([None]),                              # labels padded to max length in batch
                          tf.TensorShape([]),                                  # sizes not padded
                          tf.TensorShape([]))                                  # sizes not padded
-        padding_values = (tf.constant(0.0, dtype=tf.float64),                    # cepstra padded with 0
-                          tf.constant(DataLoader.c2n_map[' '], dtype=tf.uint8),  # labels padded with blank
+        padding_values = (tf.constant(0.0, dtype=tf.float32),                    # cepstra padded with 0
+                          tf.constant(DataLoader.c2n_map[' '], dtype=tf.int32),  # labels padded with blank
                           0,                                                     # size(cepstrum) -- unused
                           0)                                                     # size(label) -- unused
 
-        ds_train = self.ds_train.padded_batch(self.batch_size, padded_shapes, padding_values).prefetch(1)
-        ds_test = self.ds_test.padded_batch(self.batch_size, padded_shapes, padding_values).prefetch(1)
+        # TODO: make it work for drop_remainder=False
+        ds_train = self.ds_train.padded_batch(self.batch_size, padded_shapes, padding_values,
+                                              drop_remainder=True).prefetch(1)
+        ds_test = self.ds_test.padded_batch(self.batch_size, padded_shapes, padding_values,
+                                            drop_remainder=True).prefetch(1)
+
 
         # make initialisable iterator over the dataset which will return the batches of (x, y, size_x, size_y)
         iterator = tf.data.Iterator.from_structure(ds_train.output_types, ds_train.output_shapes)
@@ -226,7 +231,7 @@ class AcousticModel(object):
     def build_graph(self):
         # TODO: inputs and labels
         # x_placeholder = tf.placeholder(tf.float32, (None, None, self.num_features))
-        # y_placeholder = tf.placeholder(tf.uint8, (None, None))
+        # y_placeholder = tf.placeholder(tf.int32, (None, None))
 
         # 1st layer: stacked BiRNN with LSTM cells
         # TODO: consider using tf.contrib.rnn.stack_bidirectional_dynamic_rnn
@@ -236,7 +241,7 @@ class AcousticModel(object):
                                                                   cells_bw,
                                                                   inputs=self.inputs["x"],
                                                                   sequence_length=self.inputs["size_x"],
-                                                                  dtype=tf.float64)
+                                                                  dtype=tf.float32)
 
         # rnn_outputs == tuple(output_fw, output_bw) ... output_fw == [batch_size, max_time, num_hidden]
 
@@ -250,8 +255,8 @@ class AcousticModel(object):
         # 2nd layer: linear projection of outputs from BiRNN
         # define weights and biases for linear projection of outputs from BiRNN
         logit_size = self.alphabet_size + 1  # +1 for the blank
-        lp_weights = tf.Variable(tf.random.normal([self.num_hidden[-1], logit_size], dtype=tf.float64))
-        lp_biases = tf.Variable(tf.random.normal([logit_size], dtype=tf.float64))
+        lp_weights = tf.Variable(tf.random.normal([self.num_hidden[-1], logit_size], dtype=tf.float32))
+        lp_biases = tf.Variable(tf.random.normal([logit_size], dtype=tf.float32))
 
         # convert rnn_outputs into logits (apply linear projection of rnn outputs)
         # lp_outputs.shape == [batch_size*max_time, alphabet_size + 1]
@@ -260,10 +265,29 @@ class AcousticModel(object):
         # reshape lp_outputs to shape [batch_size, max_time, alphabet_size + 1]
         logits = tf.reshape(lp_outputs, [self.batch_size, self.max_time, logit_size])
 
-        # calculate ctc loss of logits
+        # convert labels to sparse tensor
+        labels = tf.contrib.layers.dense_to_sparse(self.inputs["y"])
+        # TODO: check if we need to add eos_token to the transcripts!
+
+        # decode the logits
         # TODO: create separate function for this
-        self.total_loss = tf.nn.ctc_loss(labels=self.inputs["y"], inputs=logits, sequence_length=self.inputs["size_x"])
+        ctc_output = tf.nn.ctc_beam_search_decoder(inputs=logits,
+                                                   sequence_length=self.inputs["size_x"],
+                                                   beam_width=self.beam_width,
+                                                   top_paths=self.top_paths,
+                                                   merge_repeated=True)
+        # !!! ValueError: Dimensions must be equal, but are 13302 and 20 for 'CTCBeamSearchDecoder'
+        # (op: 'CTCBeamSearchDecoder') with input shapes: [20,13302,44], [20].
+        # !!! inputs: 3-D float Tensor, size [max_time, batch_size, num_classes]. The logits.
+        # TODO: switch the max_time and batch_size dimensions
+
+        # calculate ctc loss of logits
+        ctc_loss = tf.nn.ctc_loss(labels=labels, inputs=logits, sequence_length=self.inputs["size_x"])
         # !!!TypeError: Expected labels (first argument) to be a SparseTensor
+
+        self.outputs = {"ctc_output": ctc_output,
+                        "ctc_loss": ctc_loss,
+                        }
 
 
         # tf.nn.batch_normalization()
@@ -274,7 +298,7 @@ class AcousticModel(object):
         # TODO: tf.reduce_mean(ctc_loss) -> cost
         # TODO: optimizer
         # TODO: minimize(cost)
-        raise Exception('The build_graph function must be implemented')
+        # raise Exception('The build_graph function must be implemented')
 
     def infer(self):
         raise Exception('The infer function must be implemented')
