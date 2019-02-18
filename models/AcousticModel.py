@@ -229,7 +229,8 @@ class AcousticModel(object):
     def lstm_cell(num_hidden):
         # TODO: try to use tf.contrib.cudnn_rnn.CudnnLSTM(num_units=self.num_hidden, state_is_tuple=True)
         # TODO: Batch Normalization at LSTM outputs (before the activation function)
-        return tf.nn.rnn_cell.LSTMCell(num_units=num_hidden, state_is_tuple=True, activation='tanh')
+        return tf.contrib.rnn.LSTMBlockCell(num_units=num_hidden)
+        # return tf.nn.rnn_cell.LSTMCell(num_units=num_hidden, state_is_tuple=True, activation='tanh')
 
 
     def build_graph(self):
@@ -245,7 +246,8 @@ class AcousticModel(object):
                                                                            cells_bw,
                                                                            inputs=self.inputs["x"],
                                                                            sequence_length=self.inputs["size_x"],
-                                                                           dtype=tf.float32)
+                                                                           dtype=tf.float32,
+                                                                           parallel_iterations=64)
         # rnn_outputs == Tensor of shape [batch_size, max_time, 2*num_hidden]
 
         # transpose rnn_outputs into time major tensor -> [max_time, batch_size, 2*num_hidden]

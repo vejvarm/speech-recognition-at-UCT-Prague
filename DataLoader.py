@@ -7,7 +7,7 @@ import soundfile as sf  # for loading OGG audio file format
 
 from bs4 import BeautifulSoup
 
-
+# TODO: exclude cepstra which are longer than a set number of frames
 class DataLoader:
     c2n_map = {'a': 0, 'á': 1, 'b': 2, 'c': 3, 'č': 4, 'd': 5, 'ď': 6, 'e': 7, 'é': 8, 'ě': 9,
                'f': 10, 'g': 11, 'h': 12, 'ch': 13, 'i': 14, 'í': 15, 'j': 16, 'k': 17, 'l': 18, 'm': 19,
