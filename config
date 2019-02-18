@@ -15,7 +15,10 @@
   "tt_ratio": 0.8,
   "shuffle_seed": 42,
 
-  "num_hidden": [256, 256],
+  "cepstrum_pad_val": 0.0,
+  "label_pad_val": -1,
+
+  "num_hidden": [128, 128],
   "beam_width": 5,
   "top_paths": 1
 }

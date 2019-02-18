@@ -45,6 +45,8 @@ class AcousticModel(object):
         self.save_dir = self.config['save_dir']  # directory in which to save the checkpoints and results
         self.do_train = self.config['do_train']  # if True, training will be commenced, else inference will be commenced
         self.num_cpu_cores = self.config['num_cpu_cores']  # number of CPU cores to use for parallelization
+        self.cepstrum_pad_val = self.config['cepstrum_pad_val']  # value with which to pad cepstra to same length
+        self.label_pad_val = self.config['label_pad_val']        # value to pad batches of labels to same length
 
         # Data-inferred parameters (check load_data())#
         self.num_data = None       # total number of individual data in the loaded dataset
@@ -189,15 +191,16 @@ class AcousticModel(object):
 
         """
 
+
         # combine the elements in datasets into batches of padded components
         padded_shapes = (tf.TensorShape([self.max_time, self.num_features]),  # cepstra padded to self.max_time
                          tf.TensorShape([None]),                              # labels padded to max length in batch
                          tf.TensorShape([]),                                  # sizes not padded
                          tf.TensorShape([]))                                  # sizes not padded
-        padding_values = (tf.constant(0.0, dtype=tf.float32),                    # cepstra padded with 0
-                          tf.constant(DataLoader.c2n_map[' '], dtype=tf.int32),  # labels padded with blank
-                          0,                                                     # size(cepstrum) -- unused
-                          0)                                                     # size(label) -- unused
+        padding_values = (tf.constant(self.cepstrum_pad_val, dtype=tf.float32),  # cepstra padded with 0.0
+                          tf.constant(self.label_pad_val, dtype=tf.int32),       # labels padded with -1
+                          0,                                                  # size(cepstrum) -- unused
+                          0)                                                  # size(label) -- unused
 
         # TODO: make it work for drop_remainder=False
         ds_train = self.ds_train.padded_batch(self.batch_size, padded_shapes, padding_values,
@@ -228,6 +231,7 @@ class AcousticModel(object):
         # TODO: Batch Normalization at LSTM outputs (before the activation function)
         return tf.nn.rnn_cell.LSTMCell(num_units=num_hidden, state_is_tuple=True, activation='tanh')
 
+
     def build_graph(self):
         # TODO: inputs and labels
         # x_placeholder = tf.placeholder(tf.float32, (None, None, self.num_features))
@@ -248,8 +252,11 @@ class AcousticModel(object):
         # add the fw and bw outputs together into one tensor
         rnn_outputs = tf.add(rnn_outputs[0], rnn_outputs[1])
 
-        # Reshape output from a tensor of shape [batch_size, max_time, num_hidden]
-        # to a tensor of shape [batch_size*max_time, num_hidden]
+        # transpose rnn_outputs into time major tensor -> [max_time, batch_size, num_hidden]
+        rnn_outputs = tf.transpose(rnn_outputs, [1, 0, 2])
+
+        # Reshape output from a tensor of shape [max_time, batch_size, num_hidden]
+        # to a tensor of shape [max_time*batch_size, num_hidden]
         rnn_outputs = tf.reshape(rnn_outputs, [-1, self.num_hidden[-1]])
 
         # 2nd layer: linear projection of outputs from BiRNN
@@ -259,14 +266,17 @@ class AcousticModel(object):
         lp_biases = tf.Variable(tf.random.normal([logit_size], dtype=tf.float32))
 
         # convert rnn_outputs into logits (apply linear projection of rnn outputs)
-        # lp_outputs.shape == [batch_size*max_time, alphabet_size + 1]
+        # lp_outputs.shape == [max_time*batch_size, alphabet_size + 1]
         lp_outputs = tf.nn.relu(tf.add(tf.matmul(rnn_outputs, lp_weights), lp_biases))
 
-        # reshape lp_outputs to shape [batch_size, max_time, alphabet_size + 1]
-        logits = tf.reshape(lp_outputs, [self.batch_size, self.max_time, logit_size])
+        # reshape lp_outputs to shape [max_time, batch_size, alphabet_size + 1]
+        logits = tf.reshape(lp_outputs, [self.max_time, self.batch_size, logit_size])
+
+        # switch the batch_size and max_time dimensions (ctc inputs must be time major)
+#        logits = tf.transpose(logits, perm=[1, 0, 2])
 
         # convert labels to sparse tensor
-        labels = tf.contrib.layers.dense_to_sparse(self.inputs["y"])
+        labels = tf.contrib.layers.dense_to_sparse(self.inputs["y"], eos_token=self.label_pad_val)
         # TODO: check if we need to add eos_token to the transcripts!
 
         # decode the logits
@@ -276,18 +286,21 @@ class AcousticModel(object):
                                                    beam_width=self.beam_width,
                                                    top_paths=self.top_paths,
                                                    merge_repeated=True)
-        # !!! ValueError: Dimensions must be equal, but are 13302 and 20 for 'CTCBeamSearchDecoder'
-        # (op: 'CTCBeamSearchDecoder') with input shapes: [20,13302,44], [20].
-        # !!! inputs: 3-D float Tensor, size [max_time, batch_size, num_classes]. The logits.
-        # TODO: switch the max_time and batch_size dimensions
 
         # calculate ctc loss of logits
-        ctc_loss = tf.nn.ctc_loss(labels=labels, inputs=logits, sequence_length=self.inputs["size_x"])
-        # !!!TypeError: Expected labels (first argument) to be a SparseTensor
+        ctc_loss = tf.nn.ctc_loss(labels=labels, inputs=logits,
+                                  sequence_length=self.inputs["size_x"])
+
+        # Calculate the average loss across the batch
+        avg_loss = tf.reduce_mean(ctc_loss)
+
+        # use AdamOptimizer to minimize the ctc_losses (training the model)
+        optimizer = tf.train.AdamOptimizer(learning_rate=self.lr).minimize(ctc_loss)
 
         self.outputs = {"ctc_output": ctc_output,
                         "ctc_loss": ctc_loss,
-                        }
+                        "avg_loss": avg_loss,
+                        "optimizer": optimizer}
 
 
         # tf.nn.batch_normalization()

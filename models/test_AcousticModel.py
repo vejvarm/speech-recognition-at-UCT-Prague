@@ -73,11 +73,12 @@ class TestData(TestAcousticModel):
             sess.run(self.ac_model.inputs["init_train"])
             try:
                 while True:
-                    output = sess.run(self.ac_model.outputs["ctc_output"])
-                    total_loss += 0
+                    sess.run(self.ac_model.outputs["optimizer"])
+                    loss, output = sess.run([self.ac_model.outputs["ctc_loss"], self.ac_model.outputs["ctc_output"]])
+                    total_loss += loss
                     count_train += 1
                     if count_train % 10 == 0:
-                        print("___TRAINING BATCH no. {}___\n".format(count_train), output, 0)
+                        print("___TRAINING BATCH no. {}___\n".format(count_train), total_loss, output)
             except tf.errors.OutOfRangeError:
                 pass
 
