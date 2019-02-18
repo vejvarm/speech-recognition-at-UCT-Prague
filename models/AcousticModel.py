@@ -239,30 +239,26 @@ class AcousticModel(object):
 
         # 1st layer: stacked BiRNN with LSTM cells
         # TODO: consider using tf.contrib.rnn.stack_bidirectional_dynamic_rnn
-        cells_fw = tf.nn.rnn_cell.MultiRNNCell([self.lstm_cell(n) for n in self.num_hidden])  # forward stacked cells
-        cells_bw = tf.nn.rnn_cell.MultiRNNCell([self.lstm_cell(n) for n in self.num_hidden])  # backward stacked cells
-        rnn_outputs, rnn_states = tf.nn.bidirectional_dynamic_rnn(cells_fw,
-                                                                  cells_bw,
-                                                                  inputs=self.inputs["x"],
-                                                                  sequence_length=self.inputs["size_x"],
-                                                                  dtype=tf.float32)
+        cells_fw = [self.lstm_cell(n) for n in self.num_hidden]  # list of forward direction cells
+        cells_bw = [self.lstm_cell(n) for n in self.num_hidden]  # list of backward direction cells
+        rnn_outputs, _, _ = tf.contrib.rnn.stack_bidirectional_dynamic_rnn(cells_fw,
+                                                                           cells_bw,
+                                                                           inputs=self.inputs["x"],
+                                                                           sequence_length=self.inputs["size_x"],
+                                                                           dtype=tf.float32)
+        # rnn_outputs == Tensor of shape [batch_size, max_time, 2*num_hidden]
 
-        # rnn_outputs == tuple(output_fw, output_bw) ... output_fw == [batch_size, max_time, num_hidden]
-
-        # add the fw and bw outputs together into one tensor
-        rnn_outputs = tf.add(rnn_outputs[0], rnn_outputs[1])
-
-        # transpose rnn_outputs into time major tensor -> [max_time, batch_size, num_hidden]
+        # transpose rnn_outputs into time major tensor -> [max_time, batch_size, 2*num_hidden]
         rnn_outputs = tf.transpose(rnn_outputs, [1, 0, 2])
 
-        # Reshape output from a tensor of shape [max_time, batch_size, num_hidden]
-        # to a tensor of shape [max_time*batch_size, num_hidden]
-        rnn_outputs = tf.reshape(rnn_outputs, [-1, self.num_hidden[-1]])
+        # Reshape output from a tensor of shape [max_time, batch_size, 2*num_hidden]
+        # to a tensor of shape [max_time*batch_size, 2*num_hidden]
+        rnn_outputs = tf.reshape(rnn_outputs, [-1, 2*self.num_hidden[-1]])
 
         # 2nd layer: linear projection of outputs from BiRNN
         # define weights and biases for linear projection of outputs from BiRNN
         logit_size = self.alphabet_size + 1  # +1 for the blank
-        lp_weights = tf.Variable(tf.random.normal([self.num_hidden[-1], logit_size], dtype=tf.float32))
+        lp_weights = tf.Variable(tf.random.normal([2*self.num_hidden[-1], logit_size], dtype=tf.float32))
         lp_biases = tf.Variable(tf.random.normal([logit_size], dtype=tf.float32))
 
         # convert rnn_outputs into logits (apply linear projection of rnn outputs)

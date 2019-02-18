@@ -18,7 +18,7 @@
   "cepstrum_pad_val": 0.0,
   "label_pad_val": -1,
 
-  "num_hidden": [128, 128],
+  "num_hidden": [128, 64],
   "beam_width": 5,
   "top_paths": 1
 }
