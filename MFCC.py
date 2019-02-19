@@ -258,11 +258,14 @@ class MFCC:
 
     @staticmethod
     def load_cepstra(folder):
-        """load mfcc from cepstrum-###.npy files in specified folder (or subfolders if present)
-        to a list of lists of 2D numpy arrays
+        """load mfcc from cepstrum-###.npy files from specified folder (or subfolders if present)
+        :param folder: string path leading to the folder with cepstra files
+
+        :return list of lists of 2D numpy arrays, list of lists of strings with paths to files
         """
         # if the folder contains subfolders, load data from all subfolders
         cepstra = []
+        path_list = []
         subfolders = [os.path.join(folder, subfolder) for subfolder in next(os.walk(folder))[1]]
 
         # if there are no subfolders in the provided folder, look for the transcripts directly in folder
@@ -272,11 +275,12 @@ class MFCC:
         for sub in subfolders:
             files = [os.path.splitext(f) for f in os.listdir(sub) if
                      os.path.isfile(os.path.join(sub, f))]
-            subcepstra = [np.load(os.path.join(sub, ''.join(file)))
-                          for file in files if 'cepstrum' in file[0] and file[-1] == '.npy']  # load only .npy files
+            paths = [os.path.abspath(os.path.join(sub, ''.join(file)))
+                     for file in files if 'cepstrum' in file[0] and file[-1] == '.npy']  # load only .npy files
+            subcepstra = [np.load(path) for path in paths]
             cepstra.append(subcepstra)
-
-        return cepstra
+            path_list.append(paths)  # load only .npy files
+        return cepstra, path_list
 
 
 if __name__ == '__main__':

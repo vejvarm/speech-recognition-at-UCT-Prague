@@ -7,7 +7,7 @@ if __name__ == '__main__':
     config_path = "./config"
     ac_model = AcousticModel(config_path)
 
-    epochs = 10
+    epochs = ac_model.max_epochs
 
     with tf.Session() as sess:
         # training dataset

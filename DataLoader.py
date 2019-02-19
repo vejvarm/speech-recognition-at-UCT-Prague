@@ -7,6 +7,7 @@ import soundfile as sf  # for loading OGG audio file format
 
 from bs4 import BeautifulSoup
 
+
 # TODO: exclude cepstra which are longer than a set number of frames
 class DataLoader:
     c2n_map = {'a': 0, 'á': 1, 'b': 2, 'c': 3, 'č': 4, 'd': 5, 'ď': 6, 'e': 7, 'é': 8, 'ě': 9,
@@ -36,7 +37,8 @@ class DataLoader:
         """ Transform list of sentences (tokens) to list of lists with numeric representations of the
         characters depending on their position in the czech alphabet.
         """
-        arraylist = [np.asarray([self.c2n_map[c] for c in chars.lower()], dtype=np.uint8) for chars in sentlist]
+        arraylist = [np.asarray([self.c2n_map[c] if c in self.c2n_map.keys() else self.c2n_map[' ']
+                                 for c in chars.lower()], dtype=np.uint8) for chars in sentlist]
         for i in range(len(arraylist)):
             ch_idcs = [(r.start(), r.end() - 1) for r in re.finditer('ch', sentlist[i])]
 
@@ -70,8 +72,11 @@ class DataLoader:
         """ Load labels of transcripts from transcript-###.npy files in specified folder
         into a list of lists of 1D numpy arrays
         :param folder: string path leading to the folder with transcript files
+
+        :return list of lists of 2D numpy arrays, list of lists of strings with paths to files
         """
         labels = []
+        path_list = []
         subfolders = [os.path.join(folder, subfolder) for subfolder in next(os.walk(folder))[1]]
 
         # if there are no subfolders in the provided folder, look for the transcripts directly in folder
@@ -81,11 +86,13 @@ class DataLoader:
         for sub in subfolders:
             files = [os.path.splitext(f) for f in os.listdir(sub) if
                      os.path.isfile(os.path.join(sub, f))]
-            sublabels = [np.load(os.path.join(sub, ''.join(file)))
-                         for file in files if 'transcript' in file[0] and file[-1] == '.npy']  # load only .npy files
+            paths = [os.path.abspath(os.path.join(sub, ''.join(file)))
+                     for file in files if 'transcript' in file[0] and file[-1] == '.npy']
+            sublabels = [np.load(path) for path in paths]
+            path_list.append(paths)
             labels.append(sublabels)
 
-        return labels
+        return labels, path_list
 
 
 class PDTSCLoader(DataLoader):
@@ -195,8 +202,15 @@ class PDTSCLoader(DataLoader):
 
 
 if __name__ == '__main__':
-#    pass
-    pdtsc = PDTSCLoader(['data/pdtsc_142.ogg', 'data/pdtsc_001.ogg'], ['data/pdtsc_142.wdata', 'data/pdtsc_001.wdata'])
+
+    audio_folder = "./data/raw/audio/"
+    transcript_folder = "./data/raw/transcripts/"
+    audio_files = [os.path.join(audio_folder, f) for f in os.listdir(audio_folder)
+                   if os.path.isfile(os.path.join(audio_folder, f))]
+    transcript_files = [os.path.join(transcript_folder, f) for f in os.listdir(transcript_folder)
+                        if os.path.isfile(os.path.join(transcript_folder, f))]
+
+    pdtsc = PDTSCLoader(audio_files, transcript_files)
 #    out = pdtsc.char2num(['chacha to je chalupa', 'achichouvej to je bolest', 'jako by se nechumelilo'])
 #    print(out)
 #    print(pdtsc.num2char(out))
@@ -211,6 +225,6 @@ if __name__ == '__main__':
     print(pdtsc.labels[0][0])
 #    print(pdtsc.audio[0][0])
 #    pdtsc.save_audio('./data/test_saved.ogg', pdtsc.audio[0][1], pdtsc.fs[0])
-    pdtsc.save_labels('./data', exist_ok=True)
+    pdtsc.save_labels('./data/train', exist_ok=True)
 
 

@@ -45,6 +45,7 @@ class AcousticModel(object):
         self.save_dir = self.config['save_dir']  # directory in which to save the checkpoints and results
         self.do_train = self.config['do_train']  # if True, training will be commenced, else inference will be commenced
         self.num_cpu_cores = self.config['num_cpu_cores']  # number of CPU cores to use for parallelization
+        self.parallel_iterations = self.config['parallel_iterations']  # GPU parallelization in stacked_dynamic_BiRNN
         self.cepstrum_pad_val = self.config['cepstrum_pad_val']  # value with which to pad cepstra to same length
         self.label_pad_val = self.config['label_pad_val']        # value to pad batches of labels to same length
 
@@ -127,8 +128,8 @@ class AcousticModel(object):
         :return None
 
         """
-        cepstra = load_cepstra(self.load_dir)
-        labels = load_labels(self.load_dir)
+        cepstra, _ = load_cepstra(self.load_dir)
+        labels, _ = load_labels(self.load_dir)
 
         # tests
         assert cepstra[0][0].dtype == np.float64, 'cepstra should be a list of lists with np arrays of dtype float64'
@@ -191,7 +192,6 @@ class AcousticModel(object):
 
         """
 
-
         # combine the elements in datasets into batches of padded components
         padded_shapes = (tf.TensorShape([self.max_time, self.num_features]),  # cepstra padded to self.max_time
                          tf.TensorShape([None]),                              # labels padded to max length in batch
@@ -207,7 +207,6 @@ class AcousticModel(object):
                                               drop_remainder=True).prefetch(1)
         ds_test = self.ds_test.padded_batch(self.batch_size, padded_shapes, padding_values,
                                             drop_remainder=True).prefetch(1)
-
 
         # make initialisable iterator over the dataset which will return the batches of (x, y, size_x, size_y)
         iterator = tf.data.Iterator.from_structure(ds_train.output_types, ds_train.output_shapes)
@@ -232,7 +231,6 @@ class AcousticModel(object):
         return tf.contrib.rnn.LSTMBlockCell(num_units=num_hidden)
         # return tf.nn.rnn_cell.LSTMCell(num_units=num_hidden, state_is_tuple=True, activation='tanh')
 
-
     def build_graph(self):
         # TODO: inputs and labels
         # x_placeholder = tf.placeholder(tf.float32, (None, None, self.num_features))
@@ -247,7 +245,7 @@ class AcousticModel(object):
                                                                            inputs=self.inputs["x"],
                                                                            sequence_length=self.inputs["size_x"],
                                                                            dtype=tf.float32,
-                                                                           parallel_iterations=64)
+                                                                           parallel_iterations=self.parallel_iterations)
         # rnn_outputs == Tensor of shape [batch_size, max_time, 2*num_hidden]
 
         # transpose rnn_outputs into time major tensor -> [max_time, batch_size, 2*num_hidden]
