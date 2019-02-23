@@ -43,7 +43,7 @@ def plot_logsum(framespan, nbanks, logsum, title=''):
 
 def samples_for_svk(sample=0, folder='./private/images/', dpi=300):
     pdtsc = PDTSCLoader(['data/pdtsc_003.ogg'], ['data/pdtsc_003.wdata'])
-    labels = pdtsc.load_transcripts()
+    labels = pdtsc.transcripts_to_labels()
     audio, fs = pdtsc.load_audio()
 
     audio = audio[0]

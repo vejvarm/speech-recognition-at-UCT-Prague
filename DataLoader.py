@@ -113,7 +113,11 @@ class PDTSCLoader(DataLoader):
 
         return ssmsarray
 
-    def load_transcripts(self):
+    def transcripts_to_labels(self):
+        """
+
+        :return: list of lists of transcripts
+        """
         for i, file in enumerate(self.transcripts):
             with open(file, 'r', encoding='utf8') as f:
                 raw = f.read()
@@ -151,13 +155,17 @@ class PDTSCLoader(DataLoader):
 
         return self.labels
 
-    def save_labels(self, folder='./data/', exist_ok=False):
+    def save_labels(self, labels=None, folder='./data/', exist_ok=False):
         """
         Save labels of transcripts to specified folder under folders with names equal to name of the transcrips files
         """
-        if not self.labels[0]:
-            print('The labels have not been generated yet. Please call load_transcripts class function first.')
-            return
+        if not labels:
+            if self.labels:
+                labels = self.labels
+            else:
+                print('No labels were given and the class labels have not been generated yet.'
+                      'Please call transcripts_to_labels class function first.')
+                return
 
         # get names of the loaded transcript files and use them as subfolder names
         subfolders = tuple(os.path.splitext(os.path.basename(transcript))[0] for transcript in self.transcripts)
@@ -169,10 +177,10 @@ class PDTSCLoader(DataLoader):
             print('Subfolders already exist. Please set exist_ok to True if you want to save into them anyway.')
             return
 
-        for idx in range(len(self.labels)):
-            ndigits = len(str(len(self.labels[idx])))  # zeroes to pad the name with in order to keep the correct order
+        for idx in range(len(labels)):
+            ndigits = len(str(len(labels[idx])))  # zeroes to pad the name with in order to keep the correct order
             fullpath = os.path.join(folder, subfolders[idx])
-            for i, array in enumerate(self.labels[idx]):
+            for i, array in enumerate(labels[idx]):
                 np.save('{0}/transcript-{1:0{2}d}.npy'.format(fullpath, i, ndigits), array)
 
     def load_audio(self):
@@ -216,7 +224,7 @@ if __name__ == '__main__':
 #    print(pdtsc.num2char(out))
 #    print(pdtsc.transcripts)
 #    print(pdtsc.char2num(['Ahoj já jsem Martin', 'To je super', 'Já taky']))
-    pdtsc.load_transcripts()
+    pdtsc.transcripts_to_labels()
 #    print(pdtsc.labels)
 #    pdtsc.load_audio()
 #    print(pdtsc.starts[0][0])
@@ -225,6 +233,6 @@ if __name__ == '__main__':
     print(pdtsc.labels[0][0])
 #    print(pdtsc.audio[0][0])
 #    pdtsc.save_audio('./data/test_saved.ogg', pdtsc.audio[0][1], pdtsc.fs[0])
-    pdtsc.save_labels('./data/train', exist_ok=True)
+    pdtsc.save_labels(folder='./data/train', exist_ok=True)
 
 

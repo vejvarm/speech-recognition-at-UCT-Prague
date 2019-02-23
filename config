@@ -1,26 +1,26 @@
 {
   "best": false,
   "debug": false,
-  "load_dir": "D:/!private/Lord/Git/speech_recognition/data/train_min_50_max_500",
+  "load_dir": "D:/!private/Lord/Git/speech_recognition/data/train_min_50_max_3000",
   "save_dir": "D:/!private/Lord/Git/speech_recognition/data/results",
   "do_train": true,
   "from_checkpoint": false,
 
   "num_cpu_cores": 4,
-  "parallel_iterations": 64,
+  "parallel_iterations": 32,
 
   "random": false,
 
   "lr": 0.001,
   "max_epochs": 10,
-  "batch_size": 32,
+  "batch_size": 40,
   "tt_ratio": 0.9,
   "shuffle_seed": 42,
 
   "cepstrum_pad_val": 0.0,
   "label_pad_val": -1,
 
-  "num_hidden": [64],
+  "num_hidden": [256, 128],
   "use_peephole": true,
   "beam_width": 10,
   "top_paths": 1

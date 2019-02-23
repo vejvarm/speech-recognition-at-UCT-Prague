@@ -3,13 +3,11 @@ from models.AcousticModel import AcousticModel
 from matplotlib import pyplot as plt
 import tensorflow as tf
 
-# ! TODO: solve that at one point the data causes huge loss spike which doesn't go down
+# TODO: add progress bar for training
+# TODO: add dropout
 if __name__ == '__main__':
     config_path = "./config"
     ac_model = AcousticModel(config_path)
-
-    epochs = ac_model.max_epochs
-    output = None
 
     ac_model.train(save_every=1)
 

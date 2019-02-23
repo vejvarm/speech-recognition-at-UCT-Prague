@@ -49,7 +49,7 @@ def choose_cepstra_frame_length(cepstra_load_dir, transcript_load_dir, cepstra_s
 
 
 if __name__ == '__main__':
-    min_frame_length = 100
+    min_frame_length = 50
     max_frame_length = 3000
     load_dir = "../data/train"
     save_dir = "../data/train_min_{}_max_{}".format(min_frame_length, max_frame_length)
