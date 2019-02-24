@@ -7,6 +7,7 @@ import copy
 import json
 
 from datetime import datetime
+from tqdm import tqdm
 
 import numpy as np
 import tensorflow as tf
@@ -345,19 +346,24 @@ class AcousticModel(object):
         total_test_loss = 0
         count_test = 0
 
+        num_train_batches = int(self.num_data*self.tt_ratio//self.batch_size)
+        num_test_batches = int(self.num_data*(1-self.tt_ratio)//self.batch_size)
+
         # TRAINING Dataset
         self.sess.run(self.inputs["init_train"])
         print("_____TRAINING DATA_____")
         try:
-            while True:
-                _, ctc_loss, avg_loss, output = self.sess.run([self.outputs["optimizer"],
-                                                               self.outputs["ctc_loss"],
-                                                               self.outputs["avg_loss"],
-                                                               self.outputs["ctc_outputs"]])
-                total_train_loss += avg_loss
-                count_train += 1
-                if count_train % 2 == 0:
-                    print("BATCH {} | Avg. Loss {}".format(count_train, avg_loss))
+            with tqdm(range(num_train_batches), unit="batch") as timer:
+                while True:
+                    _, ctc_loss, avg_loss, output = self.sess.run([self.outputs["optimizer"],
+                                                                   self.outputs["ctc_loss"],
+                                                                   self.outputs["avg_loss"],
+                                                                   self.outputs["ctc_outputs"]])
+                    total_train_loss += avg_loss
+                    count_train += 1
+                    timer.update(1)
+                    if count_train % 10 == 0:
+                        print("BATCH {} | Avg. Loss {}".format(count_train, avg_loss))
         except tf.errors.OutOfRangeError:
             print("Total Loss: {}".format(total_train_loss))
             print("Output Example: {}".format(output))
@@ -366,13 +372,16 @@ class AcousticModel(object):
         self.sess.run(self.inputs["init_test"])
         print("_____TESTING DATA_____")
         try:
-            while True:
-                ctc_loss, avg_loss, output = self.sess.run([self.outputs["ctc_loss"],
-                                                            self.outputs["avg_loss"],
-                                                            self.outputs["ctc_outputs"]])
-                total_test_loss += avg_loss
-                count_test += 1
-                print("BATCH {} | Avg. Loss {}".format(count_test, avg_loss))
+            with tqdm(range(num_test_batches), unit="batch") as timer:
+                while True:
+                    ctc_loss, avg_loss, output = self.sess.run([self.outputs["ctc_loss"],
+                                                                self.outputs["avg_loss"],
+                                                                self.outputs["ctc_outputs"]])
+                    total_test_loss += avg_loss
+                    count_test += 1
+                    timer.update(1)
+                    if count_test % 5 == 0:
+                        print("BATCH {} | Avg. Loss {}".format(count_test, avg_loss))
         except tf.errors.OutOfRangeError:
             print("Total Loss: {}".format(total_test_loss))
             print("Output Example: {}".format(output))

@@ -1,10 +1,10 @@
 {
   "best": false,
   "debug": false,
-  "load_dir": "D:/!private/Lord/Git/speech_recognition/data/train_min_50_max_3000",
+  "load_dir": "c:/!temp/train_min_50_max_3000",
   "save_dir": "D:/!private/Lord/Git/speech_recognition/data/results",
   "do_train": true,
-  "from_checkpoint": false,
+  "from_checkpoint": true,
 
   "num_cpu_cores": 4,
   "parallel_iterations": 32,
