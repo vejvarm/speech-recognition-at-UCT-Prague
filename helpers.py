@@ -1,6 +1,8 @@
 # helper functions for this project
 import numpy as np
 
+from tensorflow.python.client import device_lib
+
 import random
 import json
 
@@ -49,3 +51,21 @@ def list_to_padded_array(data_list):
     max_length = max(elem.shape[0] for elem in data_list)
     return np.array([np.pad(elem, ((0, max_length - elem.shape[0]), *((0, 0), )*(elem.ndim-1)), mode="constant")
                      for elem in data_list])
+
+
+def get_available_devices():
+    """get all the cpu and gpu device names available on the current system
+
+    :return dict with "gpu" and "cpu" keys containing lists of devices with given type
+    """
+    device_types = ["gpu", "cpu"]
+    devices = {"gpu": [], "cpu": []}
+    local_device_protos = device_lib.list_local_devices()
+
+    for dev_type in device_types:
+        devices[dev_type] = [x.name for x in local_device_protos if x.device_type == dev_type.upper()]
+
+    return devices
+
+
+

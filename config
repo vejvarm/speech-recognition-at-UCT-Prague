@@ -20,6 +20,9 @@
   "cepstrum_pad_val": 0.0,
   "label_pad_val": -1,
 
+  "ff_num_hidden": [512, 512, 512],
+  "ff_dropout": [0.1, 0.1, 0.1],
+  "relu_clip": 20,
   "num_hidden": [256, 128],
   "use_peephole": true,
   "beam_width": 10,

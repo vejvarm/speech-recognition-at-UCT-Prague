@@ -12,7 +12,7 @@ from tqdm import tqdm
 import numpy as np
 import tensorflow as tf
 
-from helpers import check_equal, random_shuffle, load_config
+from helpers import check_equal, random_shuffle, load_config, get_available_devices
 from MFCC import MFCC
 from DataLoader import DataLoader
 load_cepstra = MFCC.load_cepstra  # for loading  cepstrum-###.npy files from a folder into a list of lists
@@ -84,6 +84,9 @@ class AcousticModel(object):
             self.shuffle_seed = self.config['shuffle_seed']  # seed for shuffling the cepstra and labels
 
             # AcousticModel specific HP
+            self.ff_num_hidden = self.config['ff_num_hidden']  # list of number of hidden units in feed forward layers
+            self.ff_dropout = self.config['ff_dropout']   # list of dropouts after each feed forward layer
+            self.relu_clip = self.config['relu_clip']     # preventing exploding gradient with relu clipping
             self.num_hidden = self.config['num_hidden']   # number of hidden units in LSTM cells
             self.use_peephole = self.config['use_peephole']  # whether to use peephole connections in the LSTM cells
             self.beam_width = self.config['beam_width']   # beam width for the Beam Search (BS) algorithm
@@ -247,14 +250,46 @@ class AcousticModel(object):
         # return tf.contrib.rnn.GridLSTMCell(num_units=num_hidden, state_is_tuple=True, num_frequency_blocks=None)
         # return tf.nn.rnn_cell.LSTMCell(num_units=num_hidden, state_is_tuple=True, activation='tanh')
 
+    def ff_layer(self, w_name, b_name, input_size, output_size, device):
+        with tf.device(device):
+            w = tf.Variable(tf.random_uniform([input_size, output_size]), name=w_name,)
+            b = tf.Variable(tf.random_uniform([output_size]), name=b_name)
+        return w, b
+
     def build_graph(self):
         # TODO: inputs and labels
         # x_placeholder = tf.placeholder(tf.float32, (None, None, self.num_features))
         # y_placeholder = tf.placeholder(tf.int32, (None, None))
 
+        devices = get_available_devices()
+
         with self.graph.as_default():
-            # 1st layer: stacked BiRNN with LSTM cells
-            # TODO: consider using tf.contrib.rnn.stack_bidirectional_dynamic_rnn
+
+            # reshaping from [batch_size, max_time, num_features] to [max_time*batch_size, num_features]
+            batch_x = tf.transpose(self.inputs["x"], [1, 0, 2])  # transpose to [max_time, batch_size, num_features]
+            batch_x = tf.reshape(batch_x, [-1, self.num_features])  # reshape to [max_time*batch_size, num_features]
+
+            # feed forward layers
+            # 1st layer
+            w1, b1 = self.ff_layer("w1", "b1", self.num_features, self.ff_num_hidden[0], devices["cpu"][0])
+            layer_1 = tf.minimum(tf.nn.relu(tf.add(tf.matmul(batch_x, w1), b1)), self.relu_clip)
+            layer_1 = tf.nn.dropout(layer_1, keep_prob=(1.0 - self.ff_dropout[0]))
+
+            # 2nd layer
+            w2, b2 = self.ff_layer("w2", "b2", self.ff_num_hidden[0], self.ff_num_hidden[1], devices["cpu"][0])
+            layer_2 = tf.minimum(tf.nn.relu(tf.add(tf.matmul(layer_1, w2), b2)), self.relu_clip)
+            layer_2 = tf.nn.dropout(layer_2, keep_prob=(1.0 - self.ff_dropout[1]))
+
+            # 3rd layer
+            w3, b3 = self.ff_layer("w3", "b3", self.ff_num_hidden[1], self.ff_num_hidden[2], devices["cpu"][0])
+            layer_3 = tf.minimum(tf.nn.relu(tf.add(tf.matmul(layer_2, w3), b3)), self.relu_clip)
+            layer_3 = tf.nn.dropout(layer_3, keep_prob=(1.0 - self.ff_dropout[2]))
+
+            # reshape back to [batch_size, max_time, ff_num_hidden[2]] for the dynamic rnn
+            layer_3 = tf.reshape(layer_3, [self.batch_size, self.max_time, self.ff_num_hidden[2]])
+
+            # 4th layer: stacked BiRNN with LSTM cells
+            # TODO: LSTM might become a computational bottleneck
             cells_fw = [self.lstm_cell(n) for n in self.num_hidden]  # list of forward direction cells
             cells_bw = [self.lstm_cell(n) for n in self.num_hidden]  # list of backward direction cells
             rnn_outputs, _, _ = tf.contrib.rnn.stack_bidirectional_dynamic_rnn(cells_fw,
@@ -280,7 +315,7 @@ class AcousticModel(object):
 
             # convert rnn_outputs into logits (apply linear projection of rnn outputs)
             # lp_outputs.shape == [max_time*batch_size, alphabet_size + 1]
-            lp_outputs = tf.nn.relu(tf.add(tf.matmul(rnn_outputs, lp_weights), lp_biases))
+            lp_outputs = tf.minimum(tf.nn.relu(tf.add(tf.matmul(rnn_outputs, lp_weights), lp_biases)), self.relu_clip)
 
             # reshape lp_outputs to shape [max_time, batch_size, alphabet_size + 1]
             logits = tf.reshape(lp_outputs, [self.max_time, self.batch_size, logit_size])
@@ -328,11 +363,6 @@ class AcousticModel(object):
             self.init_op = tf.global_variables_initializer()
 
             # tf.nn.batch_normalization()
-            # TODO: add rnn.DropoutWrapper
-            # TODO: FC layers at every timestep output W(num_classes, num_hidden) -> (num_classes, 1) at every timestep
-            # TODO: ReLU at every FC output
-            # TODO: ctc_beam_search_decoder -> outputs (only for validation and inference)
-            # TODO: tf.reduce_mean(ctc_loss) -> cost
             # TODO: optimizer
             # TODO: minimize(cost)
             # raise Exception('The build_graph function must be implemented')

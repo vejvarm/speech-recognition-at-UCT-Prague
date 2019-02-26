@@ -23,14 +23,14 @@ def extract_filenames(audio_folder, transcript_folder):
     return files
 
 
-def prepare_data(files, save_folder, filter_nan=True):
+def prepare_data(files, save_folder, deltas=(0, 0), filter_nan=True):
     for file in files:
         pdtsc = PDTSCLoader([file[0]], [file[1]])
         labels = pdtsc.transcripts_to_labels()  # list of lists of 1D numpy arrays
         audio, fs = pdtsc.load_audio()
 
         mfcc = MFCC(audio[0], fs)  # TODO: make MFCC work for more audiofiles
-        cepstra = mfcc.transform_data()  # list of 2D arrays
+        cepstra = mfcc.transform_data(deltas=deltas)  # list of 2D arrays
 
         #    mfcc.plot_cepstra(cepstra, figstart=1, nplots=1)
 
