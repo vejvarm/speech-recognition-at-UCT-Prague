@@ -294,7 +294,7 @@ class AcousticModel(object):
             cells_bw = [self.lstm_cell(n) for n in self.num_hidden]  # list of backward direction cells
             rnn_outputs, _, _ = tf.contrib.rnn.stack_bidirectional_dynamic_rnn(cells_fw,
                                                                                cells_bw,
-                                                                               inputs=self.inputs["x"],
+                                                                               inputs=layer_3,
                                                                                sequence_length=self.inputs["size_x"],
                                                                                dtype=tf.float32,
                                                                                parallel_iterations=self.parallel_iterations)
