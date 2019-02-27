@@ -3,8 +3,9 @@ from models.AcousticModel import AcousticModel
 from matplotlib import pyplot as plt
 import tensorflow as tf
 
-# TODO: add progress bar for training
-# TODO: add dropout
+# TODO: fix exploding loss values at second epoch
+# TODO: try batch normalization layer
+# TODO: sort data by cepstrum length
 if __name__ == '__main__':
     config_path = "./config"
     ac_model = AcousticModel(config_path)
