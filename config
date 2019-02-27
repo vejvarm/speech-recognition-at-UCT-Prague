@@ -4,7 +4,7 @@
   "load_dir": "c:/!temp/train_min_50_max_3000",
   "save_dir": "D:/!private/Lord/Git/speech_recognition/data/results",
   "do_train": true,
-  "from_checkpoint": true,
+  "from_checkpoint": false,
 
   "num_cpu_cores": 4,
   "parallel_iterations": 32,
@@ -13,17 +13,18 @@
 
   "lr": 0.001,
   "max_epochs": 10,
-  "batch_size": 40,
+  "batch_size": 32,
   "tt_ratio": 0.9,
   "shuffle_seed": 42,
 
   "cepstrum_pad_val": 0.0,
   "label_pad_val": -1,
 
-  "ff_num_hidden": [512, 512, 512],
+  "ff_num_hidden": [12, 12, 12],
   "ff_dropout": [0.1, 0.1, 0.1],
+  "ff_batch_norm": false,
   "relu_clip": 20,
-  "num_hidden": [256, 128],
+  "num_hidden": [64, 64],
   "use_peephole": true,
   "beam_width": 10,
   "top_paths": 1

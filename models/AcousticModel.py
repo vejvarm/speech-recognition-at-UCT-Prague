@@ -69,6 +69,7 @@ class AcousticModel(object):
 #        self.gen_test = None       # testing data generator: yield (cepstrum [nparray], label [nparray])
         self.inputs = None          # dictionary with the outputs from batched dataset iterators
         self.outputs = None         # dictionary with outputs from the model
+        self.is_train = None        # (bool) placeholder in which we feed True during training and False otherwise
 
         # HyperParameters (HP) #
         # size of the alphabet in DataLoader
@@ -77,27 +78,27 @@ class AcousticModel(object):
             pass  # TODO: random_config() for generating random configurations of the hyperparams
         else:
             # training HP
-            self.lr = self.config['lr']                      # learning rate
-            self.max_epochs = self.config['max_epochs']      # maximum number of training epochs
-            self.batch_size = self.config['batch_size']      # size of mini_batches to be fed into the net at once
-            self.tt_ratio = self.config['tt_ratio']          # train-test data split ratio
-            self.shuffle_seed = self.config['shuffle_seed']  # seed for shuffling the cepstra and labels
+            self.lr = self.config['lr']                      # (float) learning rate
+            self.max_epochs = self.config['max_epochs']      # (int) maximum number of training epochs
+            self.batch_size = self.config['batch_size']      # (int) size of mini_batches to be fed into the net at once
+            self.tt_ratio = self.config['tt_ratio']          # (float) train-test data split ratio
+            self.shuffle_seed = self.config['shuffle_seed']  # (int) seed for shuffling the cepstra and labels
 
             # AcousticModel specific HP
-            self.ff_num_hidden = self.config['ff_num_hidden']  # list of number of hidden units in feed forward layers
-            self.ff_dropout = self.config['ff_dropout']   # list of dropouts after each feed forward layer
-            self.relu_clip = self.config['relu_clip']     # preventing exploding gradient with relu clipping
-            self.num_hidden = self.config['num_hidden']   # number of hidden units in LSTM cells
-            self.use_peephole = self.config['use_peephole']  # whether to use peephole connections in the LSTM cells
-            self.beam_width = self.config['beam_width']   # beam width for the Beam Search (BS) algorithm
-            self.top_paths = self.config['top_paths']     # number of best paths to return from the BS algorithm
+            self.ff_num_hidden = self.config['ff_num_hidden']  # (list of ints) hidden units in feed forward layers
+            self.ff_dropout = self.config['ff_dropout']   # (list of floats) dropouts after each feed forward layer
+            self.ff_batch_norm = self.config['ff_batch_norm']  # (bool) use batch normalisation in feed forward layers
+            self.relu_clip = self.config['relu_clip']     # (float) preventing exploding gradient with relu clipping
+            self.num_hidden = self.config['num_hidden']   # (list of ints) number of hidden units in LSTM cells
+            self.use_peephole = self.config['use_peephole']  # (bool) use peephole connections in the LSTM cells
+            self.beam_width = self.config['beam_width']   # (int) beam width for the Beam Search (BS) algorithm
+            self.top_paths = self.config['top_paths']     # (int) number of best paths to return from the BS algorithm
 
         self.episode_id = datetime.now().strftime('%Y%m-%d%H-%M%S')  # unique episode id from current date and time
 
         # TODO: Set properties/hyperparams function (overriding the 'config' dictionary)
 
         # TODO: save_configuration()
-
 
         self.graph = tf.Graph()
 
@@ -118,7 +119,8 @@ class AcousticModel(object):
 
         # Add all the other common code for the initialization here
         gpu_options = tf.GPUOptions(allow_growth=True)
-        sess_config = tf.ConfigProto(gpu_options=gpu_options)
+        logging_options = True if self.config["debug"] else False
+        sess_config = tf.ConfigProto(gpu_options=gpu_options, log_device_placement=logging_options)
         self.sess = tf.Session(config=sess_config, graph=self.graph)
         self.sw = tf.summary.FileWriter(self.save_dir, self.sess.graph)
 
@@ -242,6 +244,28 @@ class AcousticModel(object):
                            "init_train": iterator_train_init,
                            "init_test": iterator_test_init}
 
+    @staticmethod
+    def ff_layer(w_name, b_name, input_size, output_size):
+        w = tf.Variable(tf.random_uniform([input_size, output_size]), name=w_name)
+        b = tf.Variable(tf.random_uniform([output_size]), name=b_name)
+        return w, b
+
+    @staticmethod
+    def batch_norm_layer(x, is_train, scope):
+        # !!! during training the tf.GraphKeys.UPDATE_OPS must be called to update the mean and variance
+        bn_train = tf.contrib.layers.batch_norm(x,
+                                                decay=0.99,
+                                                is_training=True,
+                                                scope=scope,
+                                                updates_collections=None)
+        bn_infer = tf.contrib.layers.batch_norm(x,
+                                                decay=0.99,
+                                                is_training=False,
+                                                reuse=True,
+                                                scope=scope,
+                                                updates_collections=None)
+        return tf.cond(is_train, lambda: bn_train, lambda: bn_infer)
+
     def lstm_cell(self, num_hidden):
         # TODO: try to use tf.contrib.cudnn_rnn.CudnnLSTM(num_units=self.num_hidden, state_is_tuple=True)
         # TODO: Batch Normalization at LSTM outputs (before the activation function)
@@ -249,12 +273,6 @@ class AcousticModel(object):
         # return tf.contrib.grid_rnn.Grid1LSTMCell(num_units=num_hidden, state_is_tuple=True)
         # return tf.contrib.rnn.GridLSTMCell(num_units=num_hidden, state_is_tuple=True, num_frequency_blocks=None)
         # return tf.nn.rnn_cell.LSTMCell(num_units=num_hidden, state_is_tuple=True, activation='tanh')
-
-    def ff_layer(self, w_name, b_name, input_size, output_size, device):
-        with tf.device(device):
-            w = tf.Variable(tf.random_uniform([input_size, output_size]), name=w_name,)
-            b = tf.Variable(tf.random_uniform([output_size]), name=b_name)
-        return w, b
 
     def build_graph(self):
         # TODO: inputs and labels
@@ -265,28 +283,42 @@ class AcousticModel(object):
 
         with self.graph.as_default():
 
+            self.is_train = is_train = tf.placeholder(tf.bool, name="is_train")
+
             # reshaping from [batch_size, max_time, num_features] to [max_time*batch_size, num_features]
-            batch_x = tf.transpose(self.inputs["x"], [1, 0, 2])  # transpose to [max_time, batch_size, num_features]
-            batch_x = tf.reshape(batch_x, [-1, self.num_features])  # reshape to [max_time*batch_size, num_features]
+            with tf.device(devices["cpu"][0]):
+                batch_x = tf.transpose(self.inputs["x"], [1, 0, 2])  # transpose to [max_time, batch_size, num_features]
+                batch_x = tf.reshape(batch_x, [-1, self.num_features])  # reshape to [max_time*batch_size, num_features]
 
-            # feed forward layers
-            # 1st layer
-            w1, b1 = self.ff_layer("w1", "b1", self.num_features, self.ff_num_hidden[0], devices["cpu"][0])
-            layer_1 = tf.minimum(tf.nn.relu(tf.add(tf.matmul(batch_x, w1), b1)), self.relu_clip)
-            layer_1 = tf.nn.dropout(layer_1, keep_prob=(1.0 - self.ff_dropout[0]))
+                # feed forward layers
+                # 1st layer
+                with tf.variable_scope("layer_1") as scope:
+                    w1, b1 = self.ff_layer("w1", "b1", self.num_features, self.ff_num_hidden[0])
+                    layer_1 = tf.add(tf.matmul(batch_x, w1), b1)
+                    if self.ff_batch_norm:
+                        layer_1 = self.batch_norm_layer(layer_1, is_train, scope)
+                    layer_1 = tf.minimum(tf.nn.relu(layer_1), self.relu_clip)
+                    layer_1 = tf.nn.dropout(layer_1, keep_prob=(1.0 - self.ff_dropout[0]))
 
-            # 2nd layer
-            w2, b2 = self.ff_layer("w2", "b2", self.ff_num_hidden[0], self.ff_num_hidden[1], devices["cpu"][0])
-            layer_2 = tf.minimum(tf.nn.relu(tf.add(tf.matmul(layer_1, w2), b2)), self.relu_clip)
-            layer_2 = tf.nn.dropout(layer_2, keep_prob=(1.0 - self.ff_dropout[1]))
+                # 2nd layer
+                with tf.variable_scope("layer_2") as scope:
+                    w2, b2 = self.ff_layer("w2", "b2", self.ff_num_hidden[0], self.ff_num_hidden[1])
+                    layer_2 = tf.add(tf.matmul(layer_1, w2), b2)
+                    if self.ff_batch_norm:
+                        layer_2 = self.batch_norm_layer(layer_2, is_train, scope)
+                    layer_2 = tf.minimum(tf.nn.relu(layer_2), self.relu_clip)
+                    layer_2 = tf.nn.dropout(layer_2, keep_prob=(1.0 - self.ff_dropout[1]))
 
-            # 3rd layer
-            w3, b3 = self.ff_layer("w3", "b3", self.ff_num_hidden[1], self.ff_num_hidden[2], devices["cpu"][0])
-            layer_3 = tf.minimum(tf.nn.relu(tf.add(tf.matmul(layer_2, w3), b3)), self.relu_clip)
-            layer_3 = tf.nn.dropout(layer_3, keep_prob=(1.0 - self.ff_dropout[2]))
-
-            # reshape back to [batch_size, max_time, ff_num_hidden[2]] for the dynamic rnn
-            layer_3 = tf.reshape(layer_3, [self.batch_size, self.max_time, self.ff_num_hidden[2]])
+                # 3rd layer
+                with tf.variable_scope("layer_3") as scope:
+                    w3, b3 = self.ff_layer("w3", "b3", self.ff_num_hidden[1], self.ff_num_hidden[2])
+                    layer_3 = tf.add(tf.matmul(layer_2, w3), b3)
+                    if self.ff_batch_norm:
+                        layer_3 = self.batch_norm_layer(layer_3, is_train, scope)
+                    layer_3 = tf.minimum(tf.nn.relu(layer_3), self.relu_clip)
+                    layer_3 = tf.nn.dropout(layer_3, keep_prob=(1.0 - self.ff_dropout[2]))
+                    # reshape back to [batch_size, max_time, ff_num_hidden[2]] for the dynamic rnn
+                    layer_3 = tf.reshape(layer_3, [self.batch_size, self.max_time, self.ff_num_hidden[2]])
 
             # 4th layer: stacked BiRNN with LSTM cells
             # TODO: LSTM might become a computational bottleneck
@@ -294,7 +326,7 @@ class AcousticModel(object):
             cells_bw = [self.lstm_cell(n) for n in self.num_hidden]  # list of backward direction cells
             rnn_outputs, _, _ = tf.contrib.rnn.stack_bidirectional_dynamic_rnn(cells_fw,
                                                                                cells_bw,
-                                                                               inputs=self.inputs["x"],
+                                                                               inputs=layer_3,
                                                                                sequence_length=self.inputs["size_x"],
                                                                                dtype=tf.float32,
                                                                                parallel_iterations=self.parallel_iterations)
@@ -375,6 +407,7 @@ class AcousticModel(object):
         count_train = 0
         total_test_loss = 0
         count_test = 0
+        output = None
 
         num_train_batches = int(self.num_data*self.tt_ratio//self.batch_size)
         num_test_batches = int(self.num_data*(1-self.tt_ratio)//self.batch_size)
@@ -388,7 +421,8 @@ class AcousticModel(object):
                     _, ctc_loss, avg_loss, output = self.sess.run([self.outputs["optimizer"],
                                                                    self.outputs["ctc_loss"],
                                                                    self.outputs["avg_loss"],
-                                                                   self.outputs["ctc_outputs"]])
+                                                                   self.outputs["ctc_outputs"]],
+                                                                  feed_dict={self.is_train: True})
                     total_train_loss += avg_loss
                     count_train += 1
                     timer.update(1)
@@ -406,7 +440,8 @@ class AcousticModel(object):
                 while True:
                     ctc_loss, avg_loss, output = self.sess.run([self.outputs["ctc_loss"],
                                                                 self.outputs["avg_loss"],
-                                                                self.outputs["ctc_outputs"]])
+                                                                self.outputs["ctc_outputs"]],
+                                                               feed_dict={self.is_train: False})
                     total_test_loss += avg_loss
                     count_test += 1
                     timer.update(1)
