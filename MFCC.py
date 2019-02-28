@@ -55,11 +55,11 @@ class MFCC:
         if deltas[0]:
             d_mfcc = self.delta_multiple_inputs(mfcc, deltas[0])
             d_mfcc_standard = self.standardize(d_mfcc)
-            d_mfcc_standard = self.pad_with_zeros(d_mfcc_standard, deltas[0])
+            # d_mfcc_standard = self.pad_with_zeros(d_mfcc_standard, deltas[0])
         if deltas[1]:
             d2_mfcc = self.delta_multiple_inputs(self.delta_multiple_inputs(mfcc, deltas[0]), deltas[1])
             d2_mfcc_standard = self.standardize(d2_mfcc)
-            d2_mfcc_standard = self.pad_with_zeros(d2_mfcc_standard, sum(deltas))
+            # d2_mfcc_standard = self.pad_with_zeros(d2_mfcc_standard, sum(deltas))
 
         if not any(deltas):
             return mfcc_standard
@@ -206,26 +206,37 @@ class MFCC:
 
     @staticmethod
     def delta(c, order=2):
-        """calculate the Delta of the 2D cepstral array c column-wise from order surrounding frames"""
+        """calculate the Delta of the 2D cepstral array c column-wise from order surrounding frames
+
+        :return (ndarray) dinp_arr [nrows, ncols] OR dinp_arr [nrows, ncols] of NaNs if nrows <= 2*order
+        """
         nrows, ncols = np.shape(c)
         tspan = range(order, nrows - order)
+        dnrows = tspan.stop - tspan.start  # number of rows (frames) in delta array
 
-        dinp_arr = np.zeros((nrows - 2 * order, ncols))
-
-        for i in range(ncols):
-            dinp_arr[:, i] = np.array([sum(n * (c[t + n, i] - c[t - n, i]) for n in range(1, order + 1))
-                                       / (2 * sum(n ** 2 for n in range(1, order + 1))) for t in tspan])
-
-        return dinp_arr
+        if dnrows <= 0:
+            dinp_arr = np.full((nrows, ncols), np.nan)  # return array of nans
+            print("Deltas can't be calculated, returned array of NaNs for filtering purposes.")
+            return dinp_arr
+        else:
+            dinp_arr = np.zeros((nrows, ncols))
+            for i in range(ncols):
+                dinp_arr[order:nrows - order, i] = np.array([sum(
+                    n * (c[t + n, i] - c[t - n, i]) for n in range(1, order + 1)) / (
+                                                                         2 * sum(n ** 2 for n in range(1, order + 1)))
+                                                             for t in tspan])
+            return dinp_arr
 
     def delta_multiple_inputs(self, cepstral_data, order=2):
-        return [self.delta(row, order) for row in cepstral_data]
+        return [self.delta(cepstrum, order) for cepstrum in cepstral_data]
 
-    def pad_with_zeros(self, cepstral_data, pad_width=2):
+    @staticmethod
+    def pad_with_zeros(cepstral_data, pad_width=2):
         """pad individual arrays in cepstral_data list with pad_width zeros at both sides of first axis"""
         return [np.pad(inp_arr, [(pad_width, pad_width), (0, 0)], mode='constant') for inp_arr in cepstral_data]
 
-    def standardize(self, cepstral_data):
+    @staticmethod
+    def standardize(cepstral_data):
         return [np.subtract(inp_arr, np.mean(inp_arr, axis=0)) / np.std(inp_arr, axis=0) for inp_arr in cepstral_data]
 
     @staticmethod
