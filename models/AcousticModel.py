@@ -2,26 +2,70 @@
 # Morgan
 # TensorFlow: A proposal of good practices for files, folders and models architecture
 # https://blog.metaflow.fr/tensorflow-a-proposal-of-good-practices-for-files-folders-and-models-architecture-f23171501ae3
-import os
 import copy
 import json
+import os
 import sys
-
 from datetime import datetime
-from tqdm import tqdm
+from typing import List, Dict
 
 import numpy as np
 import tensorflow as tf
+from tqdm import tqdm
 
-from helpers import check_equal, random_shuffle, load_config, get_available_devices
-from MFCC import MFCC
 from DataLoader import DataLoader
+from MFCC import MFCC
+from helpers import check_equal, load_config, get_available_devices
+
 load_cepstra = MFCC.load_cepstra  # for loading  cepstrum-###.npy files from a folder into a list of lists
 load_labels = DataLoader.load_labels  # for loading transcript-###.npy files from folder into a list of lists
 
 
 # TODO: try using tf.contrib.rnn.GridLSTMCell instead of stacked bidirectional LSTM
 class AcousticModel(object):
+    load_dir: str
+    save_dir: str
+    do_train: bool
+    from_checkpoint: bool
+    num_cpu_cores: int
+    parallel_iterations: int
+    cepstrum_pad_val: float
+    label_pad_val: int
+    num_data: int
+    max_time: int
+    num_features: int
+    ds_train: tf.data.Dataset
+    ds_test: tf.data.Dataset
+    inputs: Dict[tf.Tensor, tf.Operation]
+    outputs: Dict[tf.Tensor, tf.Operation]
+    is_train: bool
+    global_step: tf.Tensor
+    increment_global_step_op: tf.Operation
+    lr: float
+    max_epochs: int
+    batch_size: int
+    tt_ratio: float
+    shuffle_seed: int
+    ff_num_hidden: List[int]
+    ff_dropout: List[float]
+    ff_batch_norm: bool
+    relu_clip: float
+    num_hidden: List[int]
+    use_peephole: bool
+    beam_width: int
+    top_paths: int
+    grad_clip: bool
+    grad_clip_val: float
+    show_device_placement: bool
+    print_batch_x: bool
+    print_layer_3: bool
+    print_grad_norm: bool
+    print_labels: bool
+    print_batch_x_op: tf.print
+    print_layer_3_op: tf.print
+    print_grad_norm_op: tf.print
+    print_labels_op: tf.print
+    episode_id: str
 
     def __init__(self, config):
         """Initialize the model and it's configuration
@@ -53,25 +97,19 @@ class AcousticModel(object):
         self.num_cpu_cores = self.config['num_cpu_cores']  # number of CPU cores to use for parallelization
         self.parallel_iterations = self.config['parallel_iterations']  # GPU parallelization in stacked_dynamic_BiRNN
         self.cepstrum_pad_val = self.config['cepstrum_pad_val']  # value with which to pad cepstra to same length
-        self.label_pad_val = self.config['label_pad_val']        # value to pad batches of labels to same length
+        self.label_pad_val = self.config['label_pad_val']  # value to pad batches of labels to same length
         self.init_op = None
 
         # Data-inferred parameters (check load_data())#
-        self.num_data = None       # total number of individual data in the loaded dataset
-        self.max_time = None       # maximal time unrolling of the BiRNN
-        self.num_features = None   # number of features in the loaded MFCC cepstra
-#        self.x_train = None        # training cepstra [list of numpy arrays] (batch_size, time_length, num_features)
-#        self.y_train = None        # training labels [list of numpy arrays] (batch_size, transcript_length)
-#        self.x_test = None         # testing cepstra [list of numpy arrays] (batch_size, time_length, num_features)
-#        self.y_test = None         # testing labels [list of numpy arrays] (batch_size, transcript_length)
-        self.ds_train = None       # tf.Dataset object with elements of training data with components (cepstrum, label)
-        self.ds_test = None        # tf.Dataset object with elements of testing data with components (cepstrum, label)
-#        self.gen_train = None      # training data generator: yield (cepstrum [nparray], label [nparray])
-#        self.gen_test = None       # testing data generator: yield (cepstrum [nparray], label [nparray])
-        self.inputs = None          # dictionary with the outputs from batched dataset iterators
-        self.outputs = None         # dictionary with outputs from the model
-        self.is_train = None        # (bool) placeholder in which we feed True during training and False otherwise
-        self.global_step = None     # (int) counter for current epoch of training
+        self.num_data = None  # total number of individual data in the loaded dataset
+        self.max_time = None  # maximal time unrolling of the BiRNN
+        self.num_features = None  # number of features in the loaded MFCC cepstra
+        self.ds_train = None  # tf.Dataset object with elements of training data with components (cepstrum, label)
+        self.ds_test = None  # tf.Dataset object with elements of testing data with components (cepstrum, label)
+        self.inputs = None  # dictionary with the inputs to model from batched dataset iterators
+        self.outputs = None  # dictionary with outputs from the model
+        self.is_train = None  # (bool) placeholder in which we feed True during training and False otherwise
+        self.global_step = None  # (int) counter for current epoch of training
         self.increment_global_step_op = None  # operation for incrementing global_step by 1
 
         # HyperParameters (HP) #
@@ -81,22 +119,22 @@ class AcousticModel(object):
             pass  # TODO: random_config() for generating random configurations of the hyperparams
         else:
             # training HP
-            self.lr = self.config['lr']                      # (float) learning rate
-            self.max_epochs = self.config['max_epochs']      # (int) maximum number of training epochs
-            self.batch_size = self.config['batch_size']      # (int) size of mini_batches to be fed into the net at once
-            self.tt_ratio = self.config['tt_ratio']          # (float) train-test data split ratio
+            self.lr = self.config['lr']  # (float) learning rate
+            self.max_epochs = self.config['max_epochs']  # (int) maximum number of training epochs
+            self.batch_size = self.config['batch_size']  # (int) size of mini_batches to be fed into the net at once
+            self.tt_ratio = self.config['tt_ratio']  # (float) train-test data split ratio
             self.shuffle_seed = self.config['shuffle_seed']  # (int) seed for shuffling the cepstra and labels
 
             # AcousticModel specific HP
             self.ff_num_hidden = self.config['ff_num_hidden']  # (list of ints) hidden units in feed forward layers
-            self.ff_dropout = self.config['ff_dropout']   # (list of floats) dropouts after each feed forward layer
+            self.ff_dropout = self.config['ff_dropout']  # (list of floats) dropouts after each feed forward layer
             self.ff_batch_norm = self.config['ff_batch_norm']  # (bool) use batch normalisation in feed forward layers
-            self.relu_clip = self.config['relu_clip']     # (float) preventing exploding gradient with relu clipping
-            self.num_hidden = self.config['num_hidden']   # (list of ints) number of hidden units in LSTM cells
+            self.relu_clip = self.config['relu_clip']  # (float) preventing exploding gradient with relu clipping
+            self.num_hidden = self.config['num_hidden']  # (list of ints) number of hidden units in LSTM cells
             self.use_peephole = self.config['use_peephole']  # (bool) use peephole connections in the LSTM cells
-            self.beam_width = self.config['beam_width']   # (int) beam width for the Beam Search (BS) algorithm
-            self.top_paths = self.config['top_paths']     # (int) number of best paths to return from the BS algorithm
-            self.grad_clip = self.config['grad_clip']     # (bool) if or not to use gradient clipping by global norm
+            self.beam_width = self.config['beam_width']  # (int) beam width for the Beam Search (BS) algorithm
+            self.top_paths = self.config['top_paths']  # (int) number of best paths to return from the BS algorithm
+            self.grad_clip = self.config['grad_clip']  # (bool) if or not to use gradient clipping by global norm
             self.grad_clip_val = self.config['grad_clip_val']  # (float) value at which to clip gradient global norm
 
         # DEBUGGING SETTINGS # (works only if config["debug"] == True)
@@ -151,7 +189,6 @@ class AcousticModel(object):
         #    self.infer()
         self.init()
 
-
     def load_data(self):
         """ load cepstra and labels from load_dir, shuffle them and split them into training and testing datasets
         :ivar self.ds_train (tf.data.Dataset object)
@@ -190,8 +227,8 @@ class AcousticModel(object):
         # cepstra, labels = random_shuffle(cepstra, labels, self.shuffle_seed)
 
         # split cepstra and labels into traning and testing parts
-        len_train = int(self.tt_ratio*self.num_data)  # length of the training data
-        len_test = self.num_data - int(self.tt_ratio*self.num_data)  # length of the testing data
+        len_train = int(self.tt_ratio * self.num_data)  # length of the training data
+        len_test = self.num_data - int(self.tt_ratio * self.num_data)  # length of the testing data
         slice_train = slice(0, len_train)  # training part of the data
         slice_test = slice(len_train, None)  # testing part of the data
         x_train = cepstra[slice_train]
@@ -232,13 +269,13 @@ class AcousticModel(object):
         with self.graph.as_default():
             # combine the elements in datasets into batches of padded components
             padded_shapes = (tf.TensorShape([self.max_time, self.num_features]),  # cepstra padded to self.max_time
-                             tf.TensorShape([None]),                              # labels padded to max length in batch
-                             tf.TensorShape([]),                                  # sizes not padded
-                             tf.TensorShape([]))                                  # sizes not padded
+                             tf.TensorShape([None]),  # labels padded to max length in batch
+                             tf.TensorShape([]),  # sizes not padded
+                             tf.TensorShape([]))  # sizes not padded
             padding_values = (tf.constant(self.cepstrum_pad_val, dtype=tf.float32),  # cepstra padded with 0.0
-                              tf.constant(self.label_pad_val, dtype=tf.int32),       # labels padded with -1
-                              0,                                                  # size(cepstrum) -- unused
-                              0)                                                  # size(label) -- unused
+                              tf.constant(self.label_pad_val, dtype=tf.int32),  # labels padded with -1
+                              0,  # size(cepstrum) -- unused
+                              0)  # size(label) -- unused
 
             # TODO: make it work for drop_remainder=False
             ds_train = self.ds_train.padded_batch(self.batch_size, padded_shapes, padding_values,
@@ -311,7 +348,7 @@ class AcousticModel(object):
                 if self.print_batch_x:
                     # print batch_x
                     self.print_batch_x_op = tf.print("batch_x: ", batch_x, "shape: ", batch_x.shape,
-                                                  output_stream=sys.stdout)
+                                                     output_stream=sys.stdout)
 
                 # feed forward layers
                 # 1st layer
@@ -345,7 +382,7 @@ class AcousticModel(object):
 
                 if self.print_layer_3:
                     self.print_layer_3_op = tf.print("layer_3: ", layer_3, "shape: ", layer_3.shape,
-                                                  output_stream=sys.stdout)
+                                                     output_stream=sys.stdout)
 
             # 4th layer: stacked BiRNN with LSTM cells
             # TODO: LSTM might become a computational bottleneck
@@ -364,12 +401,12 @@ class AcousticModel(object):
 
             # Reshape output from a tensor of shape [max_time, batch_size, 2*num_hidden]
             # to a tensor of shape [max_time*batch_size, 2*num_hidden]
-            rnn_outputs = tf.reshape(rnn_outputs, [-1, 2*self.num_hidden[-1]])
+            rnn_outputs = tf.reshape(rnn_outputs, [-1, 2 * self.num_hidden[-1]])
 
             # 2nd layer: linear projection of outputs from BiRNN
             # define weights and biases for linear projection of outputs from BiRNN
             logit_size = self.alphabet_size + 1  # +1 for the blank
-            lp_weights = tf.Variable(tf.random.normal([2*self.num_hidden[-1], logit_size], dtype=tf.float32))
+            lp_weights = tf.Variable(tf.random.normal([2 * self.num_hidden[-1], logit_size], dtype=tf.float32))
             lp_biases = tf.Variable(tf.random.normal([logit_size], dtype=tf.float32))
 
             # convert rnn_outputs into logits (apply linear projection of rnn outputs)
@@ -380,7 +417,7 @@ class AcousticModel(object):
             logits = tf.reshape(lp_outputs, [self.max_time, self.batch_size, logit_size])
 
             # switch the batch_size and max_time dimensions (ctc inputs must be time major)
-    #        logits = tf.transpose(logits, perm=[1, 0, 2])
+            #        logits = tf.transpose(logits, perm=[1, 0, 2])
 
             # print labels
             if self.print_labels:
@@ -447,8 +484,8 @@ class AcousticModel(object):
         count_test = 0
         output = None
 
-        num_train_batches = int(self.num_data*self.tt_ratio//self.batch_size)
-        num_test_batches = int(self.num_data*(1-self.tt_ratio)//self.batch_size)
+        num_train_batches = int(self.num_data * self.tt_ratio // self.batch_size)
+        num_test_batches = int(self.num_data * (1 - self.tt_ratio) // self.batch_size)
 
         # increment global step by one
         self.sess.run(self.increment_global_step_op)
@@ -539,6 +576,3 @@ class AcousticModel(object):
             if self.config['debug']:
                 print('Loading the model from folder: %s' % self.save_dir)
             self.saver.restore(self.sess, checkpoint.model_checkpoint_path)
-
-
-

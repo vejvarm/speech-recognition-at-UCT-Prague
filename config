@@ -1,10 +1,10 @@
 {
   "best": false,
-  "debug": true,
+  "debug": false,
   "load_dir": "c:/!temp/train_deltas_min_30_max_3000",
   "save_dir": "D:/!private/Lord/Git/speech_recognition/data/results",
   "do_train": true,
-  "from_checkpoint": false,
+  "from_checkpoint": true,
 
   "num_cpu_cores": 4,
   "parallel_iterations": 32,
@@ -34,6 +34,6 @@
   "show_device_placement": false,
   "print_batch_x": false,
   "print_layer_3": false,
-  "print_grad_norm": true,
+  "print_grad_norm": false,
   "print_labels": false
 }
