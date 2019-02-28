@@ -5,6 +5,7 @@
 import os
 import copy
 import json
+import sys
 
 from datetime import datetime
 from tqdm import tqdm
@@ -70,6 +71,8 @@ class AcousticModel(object):
         self.inputs = None          # dictionary with the outputs from batched dataset iterators
         self.outputs = None         # dictionary with outputs from the model
         self.is_train = None        # (bool) placeholder in which we feed True during training and False otherwise
+        self.global_step = None     # (int) counter for current epoch of training
+        self.increment_global_step_op = None  # operation for incrementing global_step by 1
 
         # HyperParameters (HP) #
         # size of the alphabet in DataLoader
@@ -93,6 +96,21 @@ class AcousticModel(object):
             self.use_peephole = self.config['use_peephole']  # (bool) use peephole connections in the LSTM cells
             self.beam_width = self.config['beam_width']   # (int) beam width for the Beam Search (BS) algorithm
             self.top_paths = self.config['top_paths']     # (int) number of best paths to return from the BS algorithm
+            self.grad_clip = self.config['grad_clip']     # (bool) if or not to use gradient clipping by global norm
+            self.grad_clip_val = self.config['grad_clip_val']  # (float) value at which to clip gradient global norm
+
+        # DEBUGGING SETTINGS # (works only if config["debug"] == True)
+        self.show_device_placement = self.config['show_device_placement']
+        self.print_batch_x = self.config['print_batch_x']
+        self.print_layer_3 = self.config['print_layer_3']
+        self.print_grad_norm = self.config['print_grad_norm']  # (bool) whether to print out gradient norm at each batch
+        self.print_labels = self.config['print_labels']
+
+        # PRINT OPERATIONS #
+        self.print_batch_x_op = None
+        self.print_layer_3_op = None
+        self.print_grad_norm_op = None
+        self.print_labels_op = None
 
         self.episode_id = datetime.now().strftime('%Y%m-%d%H-%M%S')  # unique episode id from current date and time
 
@@ -119,7 +137,7 @@ class AcousticModel(object):
 
         # Add all the other common code for the initialization here
         gpu_options = tf.GPUOptions(allow_growth=True)
-        logging_options = True if self.config["debug"] else False
+        logging_options = True if self.config["debug"] and self.show_device_placement else False
         sess_config = tf.ConfigProto(gpu_options=gpu_options, log_device_placement=logging_options)
         self.sess = tf.Session(config=sess_config, graph=self.graph)
         self.sw = tf.summary.FileWriter(self.save_dir, self.sess.graph)
@@ -246,20 +264,20 @@ class AcousticModel(object):
 
     @staticmethod
     def ff_layer(w_name, b_name, input_size, output_size):
-        w = tf.Variable(tf.random_uniform([input_size, output_size]), name=w_name)
-        b = tf.Variable(tf.random_uniform([output_size]), name=b_name)
+        w = tf.Variable(tf.truncated_normal([input_size, output_size], stddev=0.0001), name=w_name)
+        b = tf.Variable(tf.truncated_normal([output_size], stddev=0.0001), name=b_name)
         return w, b
 
     @staticmethod
     def batch_norm_layer(x, is_train, scope):
         # !!! during training the tf.GraphKeys.UPDATE_OPS must be called to update the mean and variance
         bn_train = tf.contrib.layers.batch_norm(x,
-                                                decay=0.99,
+                                                decay=0.999,
                                                 is_training=True,
                                                 scope=scope,
                                                 updates_collections=None)
         bn_infer = tf.contrib.layers.batch_norm(x,
-                                                decay=0.99,
+                                                decay=0.999,
                                                 is_training=False,
                                                 reuse=True,
                                                 scope=scope,
@@ -289,6 +307,11 @@ class AcousticModel(object):
             with tf.device(devices["cpu"][0]):
                 batch_x = tf.transpose(self.inputs["x"], [1, 0, 2])  # transpose to [max_time, batch_size, num_features]
                 batch_x = tf.reshape(batch_x, [-1, self.num_features])  # reshape to [max_time*batch_size, num_features]
+
+                if self.print_batch_x:
+                    # print batch_x
+                    self.print_batch_x_op = tf.print("batch_x: ", batch_x, "shape: ", batch_x.shape,
+                                                  output_stream=sys.stdout)
 
                 # feed forward layers
                 # 1st layer
@@ -320,13 +343,17 @@ class AcousticModel(object):
                     # reshape back to [batch_size, max_time, ff_num_hidden[2]] for the dynamic rnn
                     layer_3 = tf.reshape(layer_3, [self.batch_size, self.max_time, self.ff_num_hidden[2]])
 
+                if self.print_layer_3:
+                    self.print_layer_3_op = tf.print("layer_3: ", layer_3, "shape: ", layer_3.shape,
+                                                  output_stream=sys.stdout)
+
             # 4th layer: stacked BiRNN with LSTM cells
             # TODO: LSTM might become a computational bottleneck
             cells_fw = [self.lstm_cell(n) for n in self.num_hidden]  # list of forward direction cells
             cells_bw = [self.lstm_cell(n) for n in self.num_hidden]  # list of backward direction cells
             rnn_outputs, _, _ = tf.contrib.rnn.stack_bidirectional_dynamic_rnn(cells_fw,
                                                                                cells_bw,
-                                                                               inputs=layer_3,
+                                                                               inputs=layer_3,  # TODO: Check the layers
                                                                                sequence_length=self.inputs["size_x"],
                                                                                dtype=tf.float32,
                                                                                parallel_iterations=self.parallel_iterations)
@@ -355,6 +382,10 @@ class AcousticModel(object):
             # switch the batch_size and max_time dimensions (ctc inputs must be time major)
     #        logits = tf.transpose(logits, perm=[1, 0, 2])
 
+            # print labels
+            if self.print_labels:
+                self.print_labels_op = tf.print("labels: ", self.inputs["y"], output_stream=sys.stdout)
+
             # convert labels to sparse tensor
             labels = tf.contrib.layers.dense_to_sparse(self.inputs["y"], eos_token=self.label_pad_val)
 
@@ -376,17 +407,24 @@ class AcousticModel(object):
             # Calculate the average loss across the batch
             avg_loss = tf.reduce_mean(ctc_loss)
 
-            # use AdamOptimizer to minimize the ctc_losses (training the model)
-            optimizer = tf.train.AdamOptimizer(learning_rate=self.lr).minimize(avg_loss)
+            # use AdamOptimizer to comput the gradients and minimize the average of ctc_loss (training the model)
+            optimizer = tf.train.AdamOptimizer(learning_rate=self.lr)
+            gradients, variables = zip(*optimizer.compute_gradients(avg_loss))
+            if self.grad_clip:
+                gradients, _ = tf.clip_by_global_norm(gradients, self.grad_clip_val)
+            if self.print_grad_norm:
+                self.print_grad_norm_op = tf.print("Grad. global norm:", tf.global_norm(gradients),
+                                                   output_stream=sys.stdout)
+            optimize = optimizer.apply_gradients(zip(gradients, variables))
 
             self.outputs = {"ctc_outputs": ctc_outputs,
                             "ctc_log_probs": ctc_log_probs,
                             "ctc_loss": ctc_loss,
                             "avg_loss": avg_loss,
-                            "optimizer": optimizer}
+                            "optimize": optimize}
 
             # global step tensor
-            self.global_step = tf.Variable(1, trainable=False, name='global_step', dtype=tf.int32)
+            self.global_step = tf.Variable(0, trainable=False, name='global_step', dtype=tf.int32)
 
             # operation for incrementing global step
             self.increment_global_step_op = tf.assign_add(self.global_step, 1)
@@ -412,17 +450,29 @@ class AcousticModel(object):
         num_train_batches = int(self.num_data*self.tt_ratio//self.batch_size)
         num_test_batches = int(self.num_data*(1-self.tt_ratio)//self.batch_size)
 
+        # increment global step by one
+        self.sess.run(self.increment_global_step_op)
+
         # TRAINING Dataset
         self.sess.run(self.inputs["init_train"])
         print("_____TRAINING DATA_____")
+        train_tensors = [self.outputs["optimize"],
+                         self.outputs["ctc_loss"],
+                         self.outputs["avg_loss"],
+                         self.outputs["ctc_outputs"]]
+        if self.config["debug"]:
+            if self.print_batch_x:
+                train_tensors.append(self.print_batch_x_op)
+            if self.print_layer_3:
+                train_tensors.append(self.print_layer_3_op)
+            if self.print_grad_norm:
+                train_tensors.append(self.print_grad_norm_op)
+            if self.print_labels:
+                train_tensors.append(self.print_labels_op)
         try:
             with tqdm(range(num_train_batches), unit="batch") as timer:
                 while True:
-                    _, ctc_loss, avg_loss, output = self.sess.run([self.outputs["optimizer"],
-                                                                   self.outputs["ctc_loss"],
-                                                                   self.outputs["avg_loss"],
-                                                                   self.outputs["ctc_outputs"]],
-                                                                  feed_dict={self.is_train: True})
+                    _, ctc_loss, avg_loss, output, *_ = self.sess.run(train_tensors, feed_dict={self.is_train: True})
                     total_train_loss += avg_loss
                     count_train += 1
                     timer.update(1)
@@ -430,7 +480,7 @@ class AcousticModel(object):
                         print("BATCH {} | Avg. Loss {}".format(count_train, avg_loss))
         except tf.errors.OutOfRangeError:
             print("Total Loss: {}".format(total_train_loss))
-            print("Output Example: {}".format(output))
+            print("Output Example: {}".format("".join([DataLoader.n2c_map[c] for c in output[0][0, :] if c != -1])))
 
         # TESTING Dataset
         self.sess.run(self.inputs["init_test"])
@@ -449,11 +499,7 @@ class AcousticModel(object):
                         print("BATCH {} | Avg. Loss {}".format(count_test, avg_loss))
         except tf.errors.OutOfRangeError:
             print("Total Loss: {}".format(total_test_loss))
-            print("Output Example: {}".format(output))
-
-        # increment global step by one
-        self.sess.run(self.increment_global_step_op)
-        # raise Exception('The learn_from_epoch function must be implemented')
+            print("Output Example: {}".format("".join([DataLoader.n2c_map[c] for c in output[0][0, :] if c != -1])))
 
     def train(self, save_every=1):
         # This function is usually common to all your models, Here is an example:

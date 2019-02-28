@@ -23,7 +23,10 @@ def extract_filenames(audio_folder, transcript_folder):
     return files
 
 
-def prepare_data(files, save_folder, deltas=(0, 0), filter_nan=True):
+def prepare_data(files, save_folder, deltas=(0, 0), filter_nan=True, sort=True):
+    final_cepstra = []
+    final_labels = []
+
     for file in files:
         pdtsc = PDTSCLoader([file[0]], [file[1]])
         labels = pdtsc.transcripts_to_labels()  # list of lists of 1D numpy arrays
@@ -44,22 +47,33 @@ def prepare_data(files, save_folder, deltas=(0, 0), filter_nan=True):
             labels[0] = list(compress(labels[0], mask_nan))
 
 
-        # SAVE Cepstra to files (features)
-        subfolder = os.path.splitext(os.path.split(file[0])[1])[0]
-        mfcc.save_cepstra(cepstra, save_folder + subfolder, exist_ok=True)
-        print(file[0] + ' transformed and saved into {}.'.format(os.path.abspath(save_folder) + subfolder))
+        # add cepstra and labels to collective lists
+        final_cepstra.extend(cepstra)
+        print(file[0].split("/")[-1] + " extracted.")
+        final_labels.extend(labels[0])
+        print(file[1].split("/")[-1] + " extracted.")
 
-        # SAVE Transcripts to files (labels)
-        pdtsc.save_labels(labels, save_folder, exist_ok=True)
-        print(file[1] + ' transformed and saved into {}.'.format(os.path.abspath(save_folder) + subfolder))
+    # sort cepstra and labels by time length (number of frames)
+    if sort:
+        sort_indices = np.argsort([c.shape[0] for c in final_cepstra])  # indices which sort the lists by cepstra length
+        final_cepstra = [final_cepstra[i] for i in sort_indices]    # sort the cepstra list
+        final_labels = [final_labels[i] for i in sort_indices]      # sort the label list
+
+    # SAVE Cepstra to files (features)
+    MFCC.save_cepstra(final_cepstra, save_folder, exist_ok=True)
+
+    # SAVE Transcripts to files (labels)
+    pdtsc.save_labels([final_labels], save_folder, exist_ok=True)
+
+    print('files transformed and saved into {}.'.format(os.path.abspath(save_folder)))
 
 
 if __name__ == '__main__':
     # extracting audiofiles, transforming into cepstra and saving to separate folders
     audio_folder = "../data/raw/audio/"
     transcript_folder = "../data/raw/transcripts/"
-    save_folder = '../data/train/'
+    save_folder = '../data/train_deltas/'
 
     files = extract_filenames(audio_folder, transcript_folder)
 
-    prepare_data(files, save_folder)
+    prepare_data(files, save_folder, deltas=(2, 2), filter_nan=True)
