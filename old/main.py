@@ -178,7 +178,7 @@ def main():
           "C    \t ... amount of cepstral coefficients \n"
           "------------------------------------------------")
 
-    sample_rate, signal = wavfile.read('data/ucisedobre.wav')
+    sample_rate, signal = wavfile.read('../data/ucisedobre.wav')
     # signal, sample_rate = sf.read('./data/pdtsc_142.ogg')
     signal = signal[0:int(3.5 * sample_rate)]  # TODO: Don't forget that you only take the first 3.5 sec
 

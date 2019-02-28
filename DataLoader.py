@@ -1,4 +1,5 @@
 import re
+import os
 
 # from icu import LocaleData
 import numpy as np
@@ -6,7 +7,15 @@ import soundfile as sf  # for loading OGG audio file format
 
 from bs4 import BeautifulSoup
 
+
+# TODO: exclude cepstra which are longer than a set number of frames
 class DataLoader:
+    c2n_map = {'a': 0, 'á': 1, 'b': 2, 'c': 3, 'č': 4, 'd': 5, 'ď': 6, 'e': 7, 'é': 8, 'ě': 9,
+               'f': 10, 'g': 11, 'h': 12, 'ch': 13, 'i': 14, 'í': 15, 'j': 16, 'k': 17, 'l': 18, 'm': 19,
+               'n': 20, 'ň': 21, 'o': 22, 'ó': 23, 'p': 24, 'q': 25, 'r': 26, 'ř': 27, 's': 28, 'š': 29,
+               't': 30, 'ť': 31, 'u': 32, 'ú': 33, 'ů': 34, 'v': 35, 'w': 36, 'x': 37, 'y': 38, 'ý': 39,
+               'z': 40, 'ž': 41, ' ': 42}
+    n2c_map = {val: idx for idx, val in c2n_map.items()}
 
     def __init__(self, audiofiles, transcripts):
         """ Initialize DataLoader() object
@@ -23,18 +32,13 @@ class DataLoader:
         self.tokens = [[]]*len(self.transcripts)    # list of lists of tokens (sentences) from transcripts
         self.labels = [[np.array(0, dtype=np.uint8)]]*len(self.transcripts)  # list of arrays which will contain numeric representations of characters
         # self.c2n_map = {char: i for i, char in enumerate(string.alpha)}
-        self.c2n_map = {'a':  0, 'á':  1, 'b':  2,  'c':  3, 'č':  4, 'd':  5, 'ď':  6, 'e':  7, 'é':  8, 'ě':  9,
-                        'f': 10, 'g': 11, 'h': 12, 'ch': 13, 'i': 14, 'í': 15, 'j': 16, 'k': 17, 'l': 18, 'm': 19,
-                        'n': 20, 'ň': 21, 'o': 22,  'ó': 23, 'p': 24, 'q': 25, 'r': 26, 'ř': 27, 's': 28, 'š': 29,
-                        't': 30, 'ť': 31, 'u': 32,  'ú': 33, 'ů': 34, 'v': 35, 'w': 36, 'x': 37, 'y': 38, 'ý': 39,
-                        'z': 40, 'ž': 41, ' ': 42}
-        self.n2c_map = {val: idx for idx, val in self.c2n_map.items()}
 
     def char2num(self, sentlist):
         """ Transform list of sentences (tokens) to list of lists with numeric representations of the
         characters depending on their position in the czech alphabet.
         """
-        arraylist = [np.asarray([self.c2n_map[c] for c in chars.lower()], dtype=np.uint8) for chars in sentlist]
+        arraylist = [np.asarray([self.c2n_map[c] if c in self.c2n_map.keys() else self.c2n_map[' ']
+                                 for c in chars.lower()], dtype=np.uint8) for chars in sentlist]
         for i in range(len(arraylist)):
             ch_idcs = [(r.start(), r.end() - 1) for r in re.finditer('ch', sentlist[i])]
 
@@ -63,6 +67,33 @@ class DataLoader:
         except IndexError:
             return signal
 
+    @staticmethod
+    def load_labels(folder='./data'):
+        """ Load labels of transcripts from transcript-###.npy files in specified folder
+        into a list of lists of 1D numpy arrays
+        :param folder: string path leading to the folder with transcript files
+
+        :return list of lists of 2D numpy arrays, list of lists of strings with paths to files
+        """
+        labels = []
+        path_list = []
+        subfolders = [os.path.join(folder, subfolder) for subfolder in next(os.walk(folder))[1]]
+
+        # if there are no subfolders in the provided folder, look for the transcripts directly in folder
+        if not subfolders:
+            subfolders.append(folder)
+
+        for sub in subfolders:
+            files = [os.path.splitext(f) for f in os.listdir(sub) if
+                     os.path.isfile(os.path.join(sub, f))]
+            paths = [os.path.abspath(os.path.join(sub, ''.join(file)))
+                     for file in files if 'transcript' in file[0] and file[-1] == '.npy']
+            sublabels = [np.load(path) for path in paths]
+            path_list.append(paths)
+            labels.append(sublabels)
+
+        return labels, path_list
+
 
 class PDTSCLoader(DataLoader):
 
@@ -82,7 +113,11 @@ class PDTSCLoader(DataLoader):
 
         return ssmsarray
 
-    def load_transcripts(self):
+    def transcripts_to_labels(self):
+        """
+
+        :return: list of lists of transcripts
+        """
         for i, file in enumerate(self.transcripts):
             with open(file, 'r', encoding='utf8') as f:
                 raw = f.read()
@@ -95,23 +130,58 @@ class PDTSCLoader(DataLoader):
             end_time_tags = [LM.find('end_time') for LM in lm_tags]
             token_tags = [LM.find_all('token') for LM in lm_tags]
 
-            # process the start times from start_time tags
-            self.starts[i] = self.time2secms([start.text for start in start_time_tags if start])
-
-            # process the ending times of sentences from end_time tags
-            self.ends[i] = self.time2secms([end.text for end in end_time_tags if end])
-
             # process the tokens from token tags
-            regexp = r'[^A-Za-záčďéěíňóřšťúůýž]+'
-            regexp = r'[^A-Za-záéíóúýčďěňřšťůž{ch}]+' # find all non alphabetic characters (Czech alphabet)
+            regexp = r'[^A-Za-záéíóúýčďěňřšťůž{ch}]+'  # find all non alphabetic characters (Czech alphabet)
             tokens = [' '.join([re.sub(regexp, '', token.text.lower()) for token in tokens])
                       for tokens in token_tags]  # joining sentences and removing special and numeric chars
-            self.tokens[i] = [token for token in tokens if token]  # removing empty strings
+
+            empty_idcs = [i for i, token in enumerate(tokens) if not token]  # getting indices of empty tokens
+
+            # removing empty_idcs from starts, ends and tokens
+            start_time_tags = [tag for i, tag in enumerate(start_time_tags) if i not in empty_idcs]
+            end_time_tags = [tag for i, tag in enumerate(end_time_tags) if i not in empty_idcs]
+            tokens = [token for i, token in enumerate(tokens) if i not in empty_idcs]
+
+            # save the start times, ent times and tokens to instance variables
+            self.starts[i] = self.time2secms([start.text for start in start_time_tags])
+            self.ends[i] = self.time2secms([end.text for end in end_time_tags])
+            self.tokens[i] = tokens
+
+            assert len(self.starts[i]) == len(self.ends[i]), "start times and end times don't have the same length"
+            assert len(self.ends[i]) == len(self.tokens[i]), "there is different number of tokens than end times"
 
             # convert characters in tokens to numeric values representing their position in the czech alphabet
             self.labels[i] = self.char2num(self.tokens[i])
 
         return self.labels
+
+    def save_labels(self, labels=None, folder='./data/', exist_ok=False):
+        """
+        Save labels of transcripts to specified folder under folders with names equal to name of the transcrips files
+        """
+        if not labels:
+            if self.labels:
+                labels = self.labels
+            else:
+                print('No labels were given and the class labels have not been generated yet.'
+                      'Please call transcripts_to_labels class function first.')
+                return
+
+        # get names of the loaded transcript files and use them as subfolder names
+        subfolders = tuple(os.path.splitext(os.path.basename(transcript))[0] for transcript in self.transcripts)
+
+        try:
+            for subfolder in subfolders:
+                os.makedirs(os.path.join(folder, subfolder), exist_ok=exist_ok)
+        except OSError:
+            print('Subfolders already exist. Please set exist_ok to True if you want to save into them anyway.')
+            return
+
+        for idx in range(len(labels)):
+            ndigits = len(str(len(labels[idx])))  # zeroes to pad the name with in order to keep the correct order
+            fullpath = os.path.join(folder, subfolders[idx])
+            for i, array in enumerate(labels[idx]):
+                np.save('{0}/transcript-{1:0{2}d}.npy'.format(fullpath, i, ndigits), array)
 
     def load_audio(self):
         for i, file in enumerate(self.audiofiles):
@@ -140,21 +210,29 @@ class PDTSCLoader(DataLoader):
 
 
 if __name__ == '__main__':
-    pass
-#    pdtsc = PDTSCLoader(['data/pdtsc_142.ogg'], ['data/pdtsc_142.wdata'])
+
+    audio_folder = "./data/raw/audio/"
+    transcript_folder = "./data/raw/transcripts/"
+    audio_files = [os.path.join(audio_folder, f) for f in os.listdir(audio_folder)
+                   if os.path.isfile(os.path.join(audio_folder, f))]
+    transcript_files = [os.path.join(transcript_folder, f) for f in os.listdir(transcript_folder)
+                        if os.path.isfile(os.path.join(transcript_folder, f))]
+
+    pdtsc = PDTSCLoader(audio_files, transcript_files)
 #    out = pdtsc.char2num(['chacha to je chalupa', 'achichouvej to je bolest', 'jako by se nechumelilo'])
 #    print(out)
 #    print(pdtsc.num2char(out))
 #    print(pdtsc.transcripts)
 #    print(pdtsc.char2num(['Ahoj já jsem Martin', 'To je super', 'Já taky']))
-#    pdtsc.load_transcripts()
+    pdtsc.transcripts_to_labels()
 #    print(pdtsc.labels)
 #    pdtsc.load_audio()
 #    print(pdtsc.starts[0][0])
 #    print(pdtsc.ends[0][0])
 #    print(pdtsc.tokens[0][0])
-#    print(pdtsc.labels[0][0])
+    print(pdtsc.labels[0][0])
 #    print(pdtsc.audio[0][0])
 #    pdtsc.save_audio('./data/test_saved.ogg', pdtsc.audio[0][1], pdtsc.fs[0])
+    pdtsc.save_labels(folder='./data/train', exist_ok=True)
 
 

@@ -5,6 +5,7 @@ import numpy as np
 from scipy.fftpack import dct
 from matplotlib import pyplot as plt
 
+
 class MFCC:
 
     def __init__(self, data, fs, **kwargs):
@@ -33,27 +34,32 @@ class MFCC:
         self.nbanks = kwargs['nbanks'] if 'nbanks' in kwargs else 26                     # 1
         self.cepstrums = kwargs['cepstrums'] if 'cepstrums' in kwargs else slice(1, 13)  # 1
 
+        # initialize containers
+        self.power_sfft = (np.asarray(0, dtype=np.float32),)          # tuple for power density of sffted frames
+        self.filterbanks = np.zeros((self.nbanks, self.nfft//2 + 1))  # filters to be applied to power_sfft
+        self.log_sum = (np.asarray(0, dtype=np.float32),)             # log10 of matmul(power_sfft, filterbanks)
+
     def transform_data(self, deltas=(0, 0)):
 
         data = self.pre_emphasis(self.data, self.alpha)
         frames = self.make_frames(data, self.fs, self.framewidth, self.framestride)
         hamminged = self.hamming(frames)
         fft = self.fourier_transform(hamminged, self.nfft)
-        power_fft = self.power_spectrum(fft)
+        power_sfft = self.power_spectrum(fft)
         freq_idxs = self.mel_scaled_frequency_range()
         triangles = self.triangular_filterbanks(freq_idxs)
-        log_sum = self.log_sum_of_filtered_frames(power_fft, triangles)
+        log_sum = self.log_sum_of_filtered_frames(power_sfft, triangles)
         mfcc = self.discrete_cosine_transform(log_sum)
         mfcc_standard = self.standardize(mfcc)
 
         if deltas[0]:
             d_mfcc = self.delta_multiple_inputs(mfcc, deltas[0])
             d_mfcc_standard = self.standardize(d_mfcc)
-            d_mfcc_standard = self.pad_with_zeros(d_mfcc_standard, deltas[0])
+            # d_mfcc_standard = self.pad_with_zeros(d_mfcc_standard, deltas[0])
         if deltas[1]:
             d2_mfcc = self.delta_multiple_inputs(self.delta_multiple_inputs(mfcc, deltas[0]), deltas[1])
             d2_mfcc_standard = self.standardize(d2_mfcc)
-            d2_mfcc_standard = self.pad_with_zeros(d2_mfcc_standard, sum(deltas))
+            # d2_mfcc_standard = self.pad_with_zeros(d2_mfcc_standard, sum(deltas))
 
         if not any(deltas):
             return mfcc_standard
@@ -137,7 +143,8 @@ class MFCC:
         return fft_transformed
 
     def power_spectrum(self, framed_fft):
-        return [1 / self.nfft * (np.abs(row) ** 2) for row in framed_fft]
+        self.power_sfft = tuple(1 / self.nfft * (np.abs(row) ** 2) for row in framed_fft)
+        return self.power_sfft
 
     @staticmethod
     def mel_scale(freq_input):
@@ -168,8 +175,7 @@ class MFCC:
 
         return freqs_idxs
 
-    @staticmethod
-    def triangular_filterbanks(f_idxs):
+    def triangular_filterbanks(self, f_idxs):
         """Calculate triangular filterbanks at desired indices.
         Each filterbank starts at f_idxs(i), linearly goes to 1 at f_idxs(i+1)
         and then goes linearly back to zero at f_idxs(i+2).
@@ -186,53 +192,67 @@ class MFCC:
 
             filterbanks[i, :] = np.hstack((start, line_up, line_down[1:], end))
 
+        self.filterbanks = filterbanks
+
         return filterbanks
 
-    @staticmethod
-    def log_sum_of_filtered_frames(framed_data, filters):
+    def log_sum_of_filtered_frames(self, framed_data, filters):
         """log10 of the sum of Dot product of the frames with filters in individual rows of framed_data"""
-        return [np.log10(np.matmul(frames, filters.T)) for frames in framed_data]
+        self.log_sum = tuple(np.log10(np.matmul(frames, filters.T)) for frames in framed_data)
+        return self.log_sum
 
     def discrete_cosine_transform(self, filtered_data):
         return [dct(row, type=2, axis=1, norm='ortho')[:, self.cepstrums] for row in filtered_data]
 
     @staticmethod
     def delta(c, order=2):
-        """calculate the Delta of the 2D cepstral array c column-wise from order surrounding frames"""
+        """calculate the Delta of the 2D cepstral array c column-wise from order surrounding frames
+
+        :return (ndarray) dinp_arr [nrows, ncols] OR dinp_arr [nrows, ncols] of NaNs if nrows <= 2*order
+        """
         nrows, ncols = np.shape(c)
         tspan = range(order, nrows - order)
+        dnrows = tspan.stop - tspan.start  # number of rows (frames) in delta array
 
-        dinp_arr = np.zeros((nrows - 2 * order, ncols))
-
-        for i in range(ncols):
-            dinp_arr[:, i] = np.array([sum(n * (c[t + n, i] - c[t - n, i]) for n in range(1, order + 1))
-                                       / (2 * sum(n ** 2 for n in range(1, order + 1))) for t in tspan])
-
-        return dinp_arr
+        if dnrows <= 0:
+            dinp_arr = np.full((nrows, ncols), np.nan)  # return array of nans
+            print("Deltas can't be calculated, returned array of NaNs for filtering purposes.")
+            return dinp_arr
+        else:
+            dinp_arr = np.zeros((nrows, ncols))
+            for i in range(ncols):
+                dinp_arr[order:nrows - order, i] = np.array([sum(
+                    n * (c[t + n, i] - c[t - n, i]) for n in range(1, order + 1)) / (
+                                                                         2 * sum(n ** 2 for n in range(1, order + 1)))
+                                                             for t in tspan])
+            return dinp_arr
 
     def delta_multiple_inputs(self, cepstral_data, order=2):
-        return [self.delta(row, order) for row in cepstral_data]
+        return [self.delta(cepstrum, order) for cepstrum in cepstral_data]
 
-    def pad_with_zeros(self, cepstral_data, pad_width=2):
+    @staticmethod
+    def pad_with_zeros(cepstral_data, pad_width=2):
         """pad individual arrays in cepstral_data list with pad_width zeros at both sides of first axis"""
         return [np.pad(inp_arr, [(pad_width, pad_width), (0, 0)], mode='constant') for inp_arr in cepstral_data]
 
-    def standardize(self, cepstral_data):
+    @staticmethod
+    def standardize(cepstral_data):
         return [np.subtract(inp_arr, np.mean(inp_arr, axis=0)) / np.std(inp_arr, axis=0) for inp_arr in cepstral_data]
 
-    def plot_cepstra(self, cepstral_data, nplots=3):
+    @staticmethod
+    def plot_cepstra(cepstral_data, nplots=3, framestride=0.01):
         """plot first nplots  mfcc from cepstral_data into nplots sepparate figures"""
         assert isinstance(cepstral_data, list), "cepstral_data should be a list (of 2D MFCC numpy arrays)"
         assert isinstance(cepstral_data[0], np.ndarray), "cepstral_data list should contain 2D MFCC numpy arrays"
         for i in range(nplots):
-            tspan = np.arange(np.shape(cepstral_data[i])[0]) * self.framestride
+            tspan = np.arange(np.shape(cepstral_data[i])[0]) * framestride
             ncepstra = np.arange(np.shape(cepstral_data[i])[1], dtype=np.int8)
-            plt.figure(i)
+            plt.figure()
             plt.pcolormesh(tspan, ncepstra, cepstral_data[i].T, cmap='rainbow')
             plt.title('Mel-frequency cepstral coefficients of sample no. {}'.format(i))
-            plt.xlabel('time (s)')
-            plt.ylabel('cepstral coefficients')
-        plt.show()
+            plt.xlabel('Time (s)')
+            plt.ylabel('Cepstral coefficients')
+
 
     @staticmethod
     def save_cepstra(cepstral_data, folder, exist_ok=False):
@@ -246,14 +266,33 @@ class MFCC:
             return
         ndigits = len(str(len(cepstral_data)))  # n zeroes to pad the name with in order to keep the correct order
         for i, array in enumerate(cepstral_data):
-            np.save('{0}/sample-{1:0{2}d}.npy'.format(folder, i, ndigits), array)
+            np.save('{0}/cepstrum-{1:0{2}d}.npy'.format(folder, i, ndigits), array)
 
     @staticmethod
     def load_cepstra(folder):
-        """load mfcc from separate .npy files in specified folder to a list of 2D numpy arrays"""
-        files = [os.path.splitext(f) for f in os.listdir(folder) if os.path.isfile(os.path.join(folder, f))]
-        return [np.load(os.path.join(folder, ''.join(file)))
-                for file in files if file[-1] == '.npy']  # load only .npy files
+        """load mfcc from cepstrum-###.npy files from specified folder (or subfolders if present)
+        :param folder: string path leading to the folder with cepstra files
+
+        :return list of lists of 2D numpy arrays, list of lists of strings with paths to files
+        """
+        # if the folder contains subfolders, load data from all subfolders
+        cepstra = []
+        path_list = []
+        subfolders = [os.path.join(folder, subfolder) for subfolder in next(os.walk(folder))[1]]
+
+        # if there are no subfolders in the provided folder, look for the transcripts directly in folder
+        if not subfolders:
+            subfolders.append(folder)
+
+        for sub in subfolders:
+            files = [os.path.splitext(f) for f in os.listdir(sub) if
+                     os.path.isfile(os.path.join(sub, f))]
+            paths = [os.path.abspath(os.path.join(sub, ''.join(file)))
+                     for file in files if 'cepstrum' in file[0] and file[-1] == '.npy']  # load only .npy files
+            subcepstra = [np.load(path) for path in paths]
+            cepstra.append(subcepstra)
+            path_list.append(paths)  # load only .npy files
+        return cepstra, path_list
 
 
 if __name__ == '__main__':

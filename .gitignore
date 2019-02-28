@@ -24,3 +24,11 @@ docs/~WRL1223\.tmp
 *.pyc
 
 *.npy
+
+private/
+
+MNIST_data/
+
+*.wdata
+
+data/results/
