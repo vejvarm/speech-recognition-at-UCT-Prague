@@ -432,7 +432,7 @@ class AcousticModel(object):
                                                                        sequence_length=self.inputs["size_x"],
                                                                        beam_width=self.beam_width,
                                                                        top_paths=self.top_paths,
-                                                                       merge_repeated=True)
+                                                                       merge_repeated=False)
 
             # convert outputs from sparse to dense
             ctc_outputs = [tf.sparse.to_dense(output, default_value=self.label_pad_val) for output in ctc_outputs]
