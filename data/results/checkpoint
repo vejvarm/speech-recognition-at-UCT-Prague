@@ -1,2 +1,3 @@
-model_checkpoint_path: "D:/!private/Lord/Git/speech_recognition/data/results/agent-ep_201903-0107-0857-1"
-all_model_checkpoint_paths: "D:/!private/Lord/Git/speech_recognition/data/results/agent-ep_201903-0107-0857-1"
+model_checkpoint_path: "agent-ep_201903-0219-0555-2"
+all_model_checkpoint_paths: "agent-ep_201903-0219-0555-1"
+all_model_checkpoint_paths: "agent-ep_201903-0219-0555-2"
