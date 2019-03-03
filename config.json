@@ -1,0 +1,45 @@
+{
+  "best": false,
+  "debug": true,
+  "load_dir": "c:/!temp/train_same",
+  "save_dir": "./data/results",
+  "do_train": true,
+  "from_checkpoint": true,
+
+  "num_cpu_cores": 4,
+  "parallel_iterations": 128,
+
+  "random": false,
+
+  "lr": 0.001,
+  "max_epochs": 100,
+  "batch_size": 1,
+  "tt_ratio": 0.75,
+  "shuffle_seed": 42,
+
+  "cepstrum_pad_val": 0.0,
+  "label_pad_val": -1,
+
+  "ff_num_hidden": [2048, 2048, 2048],
+  "ff_dropout": [0, 0, 0],
+  "ff_batch_norm": false,
+  "relu_clip": 20,
+  "rnn_num_hidden": [256, 128],
+  "rnn_use_peephole": true,
+  "rnn_batch_norm": false,
+  "ctc_collapse_repeated": true,
+  "ctc_merge_repeated": true,
+  "beam_width": 128,
+  "top_paths": 1,
+  "grad_clip": "local_norm",
+  "grad_clip_val": 1000,
+
+  "show_device_placement": false,
+  "print_batch_x": false,
+  "print_layer_3": false,
+  "print_dropout": false,
+  "print_rnn_outputs": false,
+  "print_gradients": false,
+  "print_grad_norm": true,
+  "print_labels": false
+}
