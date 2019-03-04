@@ -40,6 +40,7 @@ class AcousticModel(object):
     ds_test: tf.data.Dataset
     inputs: Dict[str, Union[tf.Tensor, tf.Operation]]
     outputs: Dict[str, Union[tf.Tensor, tf.Operation]]
+    ph_batch_size: tf.Tensor
     ph_is_train: tf.Tensor
     ph_ff_dropout: tf.Tensor
     global_step: tf.Tensor
@@ -118,6 +119,7 @@ class AcousticModel(object):
         self.ds_test = None  # tf.Dataset object with elements of testing data with components (cepstrum, label)
         self.inputs = None  # dictionary with the inputs to model from batched dataset iterators
         self.outputs = None  # dictionary with outputs from the model
+        self.ph_batch_size = None  # (bool) placeholder for mini-batch size
         self.ph_is_train = None  # (bool) placeholder in which we feed True during training and False otherwise
         self.ph_ff_dropout = None  # (float) placeholder
         self.global_step = None  # (int) counter for current epoch of training
@@ -132,7 +134,7 @@ class AcousticModel(object):
             # training HP
             self.lr = self.config['lr']  # (float) learning rate
             self.max_epochs = self.config['max_epochs']  # (int) maximum number of training epochs
-            self.batch_size = self.config['batch_size']  # (int) size of mini_batches to be fed into the net at once
+            self.batch_size = self.config['batch_size']  # (int) size of mini-batches during learning from epoch
             self.tt_ratio = self.config['tt_ratio']  # (float) train-test data split ratio
             self.shuffle_seed = self.config['shuffle_seed']  # (int) seed for shuffling the cepstra and labels
 
@@ -285,6 +287,9 @@ class AcousticModel(object):
 
         """
 
+        num_train_batches = int(self.num_data * self.tt_ratio // self.batch_size)
+        num_test_batches = int(self.num_data * (1 - self.tt_ratio) // self.batch_size)
+
         with self.graph.as_default():
             # combine the elements in datasets into batches of padded components
             padded_shapes = (tf.TensorShape([self.max_time, self.num_features]),  # cepstra padded to self.max_time
@@ -298,9 +303,17 @@ class AcousticModel(object):
 
             # TODO: make it work for drop_remainder=False
             ds_train = self.ds_train.padded_batch(self.batch_size, padded_shapes, padding_values,
-                                                  drop_remainder=True).prefetch(1)
+                                                  drop_remainder=True)
             ds_test = self.ds_test.padded_batch(self.batch_size, padded_shapes, padding_values,
-                                                drop_remainder=True).prefetch(1)
+                                                drop_remainder=True)
+
+            # shuffle the batches (simillar length stays in one batch but the order of batches is shuffled every epoch
+            ds_train = ds_train.shuffle(buffer_size=num_train_batches,
+                                        seed=self.shuffle_seed,  # TODO: check behaviour
+                                        reshuffle_each_iteration=True).prefetch(1)
+            ds_test = ds_test.shuffle(buffer_size=num_test_batches,
+                                      seed=self.shuffle_seed,  # TODO: check behaviour
+                                      reshuffle_each_iteration=True).prefetch(1)
 
             # make initialisable iterator over the dataset which will return the batches of (x, y, size_x, size_y)
             iterator = tf.data.Iterator.from_structure(ds_train.output_types, ds_train.output_shapes)
@@ -354,6 +367,7 @@ class AcousticModel(object):
 
         with self.graph.as_default():
 
+            self.ph_batch_size = batch_size = tf.placeholder(tf.int32, name="batch_size")
             self.ph_is_train = is_train = tf.placeholder(tf.bool, name="is_train")
             self.ph_ff_dropout = tf.placeholder(tf.float32, [len(self.ff_dropout)], name="ff_dropout")
 
@@ -371,7 +385,9 @@ class AcousticModel(object):
                         layer_1 = tf.reshape(layer_1, [-1, self.max_time, self.ff_num_hidden[0]])
                         layer_1 = self.batch_norm_layer(layer_1, is_train, scope)
                         layer_1 = tf.reshape(layer_1, [-1, self.ff_num_hidden[0]])
-                    layer_1 = tf.minimum(tf.nn.relu(layer_1), self.relu_clip)
+                    # layer_1 = tf.minimum(tf.nn.relu(layer_1), self.relu_clip)
+                    # layer_1 = tf.tanh(layer_1)
+                    layer_1 = tf.minimum(tf.nn.elu(layer_1), self.relu_clip)
                     layer_1 = tf.nn.dropout(layer_1, keep_prob=(1.0 - self.ph_ff_dropout[0]))
 
                 # 2nd layer
@@ -382,7 +398,9 @@ class AcousticModel(object):
                         layer_2 = tf.reshape(layer_2, [-1, self.max_time, self.ff_num_hidden[1]])
                         layer_2 = self.batch_norm_layer(layer_2, is_train, scope)
                         layer_2 = tf.reshape(layer_2, [-1, self.ff_num_hidden[1]])
-                    layer_2 = tf.minimum(tf.nn.relu(layer_2), self.relu_clip)
+                    # layer_2 = tf.minimum(tf.nn.relu(layer_2), self.relu_clip)
+                    # layer_2 = tf.tanh(layer_2)
+                    layer_2 = tf.minimum(tf.nn.elu(layer_2), self.relu_clip)
                     layer_2 = tf.nn.dropout(layer_2, keep_prob=(1.0 - self.ph_ff_dropout[1]))
 
                 # 3rd layer
@@ -393,7 +411,9 @@ class AcousticModel(object):
                         layer_3 = tf.reshape(layer_3, [-1, self.max_time, self.ff_num_hidden[2]])
                         layer_3 = self.batch_norm_layer(layer_3, is_train, scope)
                         layer_3 = tf.reshape(layer_3, [-1, self.ff_num_hidden[2]])
-                    layer_3 = tf.minimum(tf.nn.relu(layer_3), self.relu_clip)
+                    # layer_3 = tf.minimum(tf.nn.relu(layer_3), self.relu_clip)
+                    # layer_3 = tf.tanh(layer_3)
+                    layer_3 = tf.minimum(tf.nn.elu(layer_3), self.relu_clip)
                     layer_3 = tf.nn.dropout(layer_3, keep_prob=(1.0 - self.ph_ff_dropout[2]))
                     # reshape back to [batch_size, max_time, ff_num_hidden[2]]
                     layer_3 = tf.reshape(layer_3, [-1, self.max_time, self.ff_num_hidden[2]])
@@ -405,17 +425,25 @@ class AcousticModel(object):
             with tf.variable_scope("layer_4") as scope:
                 cells_fw = [self.lstm_cell(n) for n in self.rnn_num_hidden]  # list of forward direction cells
                 cells_bw = [self.lstm_cell(n) for n in self.rnn_num_hidden]  # list of backward direction cells
-                rnn_outputs, _, _ = tf.contrib.rnn.stack_bidirectional_dynamic_rnn(cells_fw,
-                                                                                   cells_bw,
-                                                                                   inputs=layer_3,
-                                                                                   sequence_length=self.inputs["size_x"],
-                                                                                   dtype=tf.float32,
-                                                                                   parallel_iterations=self.parallel_iterations,
-                                                                                   time_major=True)
+                initial_states_fw = [rnn.LSTMStateTuple(tf.truncated_normal([self.batch_size, n], stddev=0.00001),
+                                     tf.truncated_normal([batch_size, n], stddev=0.00001))
+                                     for n in self.rnn_num_hidden]
+                initial_states_bw = [rnn.LSTMStateTuple(tf.truncated_normal([self.batch_size, n], stddev=0.00001),
+                                     tf.truncated_normal([batch_size, n], stddev=0.00001))
+                                     for n in self.rnn_num_hidden]
+                rnn_outputs, _, _ = rnn.stack_bidirectional_dynamic_rnn(cells_fw,
+                                                                        cells_bw,
+                                                                        inputs=layer_3,
+                                                                        initial_states_fw=initial_states_fw,
+                                                                        initial_states_bw=initial_states_bw,
+                                                                        dtype=tf.float32,
+                                                                        sequence_length=self.inputs["size_x"],
+                                                                        parallel_iterations=self.parallel_iterations,
+                                                                        time_major=True)
                 # rnn_outputs: Tensor of shape [max_time, batch_size, 2*num_hidden]
 
-                # apply clipped ReLU activation to the rnn outputs
-                rnn_outputs = tf.minimum(tf.nn.relu(rnn_outputs), self.relu_clip)
+                # apply clipped ELU activation to the rnn outputs
+                rnn_outputs = tf.minimum(tf.nn.elu(rnn_outputs), self.relu_clip)
 
                 if self.print_rnn_outputs:
                     self.print_rnn_outputs_op = tf.print("rnn_outputs: ", rnn_outputs,
@@ -434,7 +462,7 @@ class AcousticModel(object):
 
             # convert rnn_outputs into logits (apply linear projection of rnn outputs)
             # lp_outputs.shape == [max_time*batch_size, alphabet_size + 1]
-            lp_outputs = tf.minimum(tf.nn.relu(tf.add(tf.matmul(rnn_outputs, lp_weights), lp_biases)), self.relu_clip)
+            lp_outputs = tf.minimum(tf.nn.elu(tf.add(tf.matmul(rnn_outputs, lp_weights), lp_biases)), self.relu_clip)
 
             # reshape lp_outputs to shape [max_time, batch_size, alphabet_size + 1]
             logits = tf.reshape(lp_outputs, [self.max_time, -1, logit_size])
@@ -458,7 +486,7 @@ class AcousticModel(object):
             update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
 
             # use AdamOptimizer to compute the gradients and minimize the average of ctc_loss (training the model)
-            optimizer = tf.train.AdamOptimizer(learning_rate=self.lr)
+            optimizer = tf.train.AdagradOptimizer(learning_rate=self.lr)
 
             gradients, variables = zip(*optimizer.compute_gradients(avg_loss))
             # Gradient clipping
@@ -568,7 +596,8 @@ class AcousticModel(object):
             with tqdm(range(num_train_batches), unit="batch") as timer:
                 while True:
                     _, ctc_loss, avg_loss, output, *_ = self.sess.run(train_tensors,
-                                                                      feed_dict={self.ph_is_train: True,
+                                                                      feed_dict={self.ph_batch_size: self.batch_size,
+                                                                                 self.ph_is_train: True,
                                                                                  self.ph_ff_dropout: self.ff_dropout})
                     total_train_loss += avg_loss
                     count_train += 1
@@ -594,7 +623,8 @@ class AcousticModel(object):
             with tqdm(range(num_test_batches), unit="batch") as timer:
                 while True:
                     ctc_loss, avg_loss, output, *_ = self.sess.run(test_tensors,
-                                                                   feed_dict={self.ph_is_train: False,
+                                                                   feed_dict={self.ph_batch_size: self.batch_size,
+                                                                              self.ph_is_train: False,
                                                                               self.ph_ff_dropout: [0.0, 0.0, 0.0]})
                     total_test_loss += avg_loss
                     count_test += 1

@@ -1,5 +1,6 @@
 from models.AcousticModel import AcousticModel
 
+# TODO: sequence-length adaptive learning rate, reduce learning rate as the sequences become longer
 # TODO: Bias gradients in LSTM are absurdly high (thousands)
 # TODO: suffle the order of batches (keeps similar lengths in batch but adds variability through epochs)
 # TODO: decaying learning rate
