@@ -55,7 +55,6 @@ class AcousticModel(object):
     relu_clip: float
     rnn_num_hidden: List[int]
     rnn_use_peephole: bool
-    rnn_batch_norm: bool
     ctc_collapse_repeated: bool
     ctc_merge_repeated: bool
     beam_width: int
@@ -144,7 +143,6 @@ class AcousticModel(object):
             self.relu_clip = self.config['relu_clip']  # (float) preventing exploding gradient with relu clipping
             self.rnn_num_hidden = self.config['rnn_num_hidden']  # (list of ints) number of hidden units in LSTM cells
             self.rnn_use_peephole = self.config['rnn_use_peephole']  # (bool) use peephole connections in the LSTM cells
-            self.rnn_batch_norm = self.config['rnn_batch_norm']  # (bool) use batch normalisation after rnn layer
             self.ctc_collapse_repeated = self.config['ctc_collapse_repeated']  # (bool)
             self.ctc_merge_repeated = self.config['ctc_merge_repeated']  # (bool)
             self.beam_width = self.config['beam_width']  # (int) beam width for the Beam Search (BS) algorithm
@@ -329,18 +327,13 @@ class AcousticModel(object):
     @staticmethod
     def batch_norm_layer(x, is_train, scope):
         # !!! during training the tf.GraphKeys.UPDATE_OPS must be called to update the mean and variance
-        bn_train = tf.contrib.layers.batch_norm(x,
-                                                decay=0.999,
-                                                is_training=True,
-                                                scope=scope,
-                                                updates_collections=None)
-        bn_infer = tf.contrib.layers.batch_norm(x,
-                                                decay=0.999,
-                                                is_training=False,
-                                                reuse=True,
-                                                scope=scope,
-                                                updates_collections=None)
-        return tf.cond(is_train, lambda: bn_train, lambda: bn_infer)
+        bn = tf.contrib.layers.batch_norm(x,
+                                          decay=0.9,
+                                          is_training=is_train,
+                                          updates_collections=tf.GraphKeys.UPDATE_OPS,
+                                          zero_debias_moving_mean=True,
+                                          scope=scope)
+        return bn
 
     def lstm_cell(self, num_hidden):
         # TODO: try to use tf.contrib.cudnn_rnn.CudnnLSTM(num_units=self.rnn_num_hidden, state_is_tuple=True)
@@ -364,10 +357,10 @@ class AcousticModel(object):
             self.ph_is_train = is_train = tf.placeholder(tf.bool, name="is_train")
             self.ph_ff_dropout = tf.placeholder(tf.float32, [len(self.ff_dropout)], name="ff_dropout")
 
-            # reshaping from [batch_size, max_time, num_features] to [max_time*batch_size, num_features]
+            # reshaping from [batch_size, max_time, num_features] to [batch_size*max_time, num_features]
             with tf.device(devices["cpu"][0]):
-                batch_x = tf.transpose(self.inputs["x"], [1, 0, 2])  # transpose to [max_time, batch_size, num_features]
-                batch_x = tf.reshape(batch_x, [-1, self.num_features])  # reshape to [max_time*batch_size, num_features]
+#                batch_x = tf.transpose(self.inputs["x"], [1, 0, 2])  # transpose to [max_time, batch_size, num_features]
+                batch_x = tf.reshape(self.inputs["x"], [-1, self.num_features])  # reshape to [batch_size*max_time, num_features]
 
                 # feed forward layers
                 # 1st layer
@@ -375,7 +368,9 @@ class AcousticModel(object):
                     w1, b1 = self.ff_layer("w1", "b1", self.num_features, self.ff_num_hidden[0])
                     layer_1 = tf.add(tf.matmul(batch_x, w1), b1)
                     if self.ff_batch_norm:
+                        layer_1 = tf.reshape(layer_1, [-1, self.max_time, self.ff_num_hidden[0]])
                         layer_1 = self.batch_norm_layer(layer_1, is_train, scope)
+                        layer_1 = tf.reshape(layer_1, [-1, self.ff_num_hidden[0]])
                     layer_1 = tf.minimum(tf.nn.relu(layer_1), self.relu_clip)
                     layer_1 = tf.nn.dropout(layer_1, keep_prob=(1.0 - self.ph_ff_dropout[0]))
 
@@ -384,7 +379,9 @@ class AcousticModel(object):
                     w2, b2 = self.ff_layer("w2", "b2", self.ff_num_hidden[0], self.ff_num_hidden[1])
                     layer_2 = tf.add(tf.matmul(layer_1, w2), b2)
                     if self.ff_batch_norm:
+                        layer_2 = tf.reshape(layer_2, [-1, self.max_time, self.ff_num_hidden[1]])
                         layer_2 = self.batch_norm_layer(layer_2, is_train, scope)
+                        layer_2 = tf.reshape(layer_2, [-1, self.ff_num_hidden[1]])
                     layer_2 = tf.minimum(tf.nn.relu(layer_2), self.relu_clip)
                     layer_2 = tf.nn.dropout(layer_2, keep_prob=(1.0 - self.ph_ff_dropout[1]))
 
@@ -393,11 +390,15 @@ class AcousticModel(object):
                     w3, b3 = self.ff_layer("w3", "b3", self.ff_num_hidden[1], self.ff_num_hidden[2])
                     layer_3 = tf.add(tf.matmul(layer_2, w3), b3)
                     if self.ff_batch_norm:
+                        layer_3 = tf.reshape(layer_3, [-1, self.max_time, self.ff_num_hidden[2]])
                         layer_3 = self.batch_norm_layer(layer_3, is_train, scope)
+                        layer_3 = tf.reshape(layer_3, [-1, self.ff_num_hidden[2]])
                     layer_3 = tf.minimum(tf.nn.relu(layer_3), self.relu_clip)
                     layer_3 = tf.nn.dropout(layer_3, keep_prob=(1.0 - self.ph_ff_dropout[2]))
-                    # reshape back to [batch_size, max_time, ff_num_hidden[2]] for the dynamic rnn
-                    layer_3 = tf.reshape(layer_3, [self.max_time, -1, self.ff_num_hidden[2]])
+                    # reshape back to [batch_size, max_time, ff_num_hidden[2]]
+                    layer_3 = tf.reshape(layer_3, [-1, self.max_time, self.ff_num_hidden[2]])
+                    # transpose into time major tensor [max_time, batch_size, ff_num_hidden[2]] for the rnn input
+                    layer_3 = tf.transpose(layer_3, [1, 0, 2])
 
             # 4th layer: stacked BiRNN with LSTM cells
             # TODO: LSTM might become a computational bottleneck
@@ -413,22 +414,22 @@ class AcousticModel(object):
                                                                                    time_major=True)
                 # rnn_outputs: Tensor of shape [max_time, batch_size, 2*num_hidden]
 
+                # apply clipped ReLU activation to the rnn outputs
+                rnn_outputs = tf.minimum(tf.nn.relu(rnn_outputs), self.relu_clip)
+
                 if self.print_rnn_outputs:
                     self.print_rnn_outputs_op = tf.print("rnn_outputs: ", rnn_outputs,
                                                          "shape: ", rnn_outputs.shape,
                                                          output_stream=sys.stdout)
-                # batch normalisation after rnn layer
-                if self.rnn_batch_norm:
-                    rnn_outputs = self.batch_norm_layer(rnn_outputs, is_train, scope)
 
                 # Reshape output from a tensor of shape [max_time, batch_size, 2*num_hidden]
                 # to a tensor of shape [max_time*batch_size, 2*num_hidden]
-                rnn_outputs = tf.reshape(rnn_outputs, [-1, 2 * self.rnn_num_hidden[-1]])
+                rnn_outputs = tf.reshape(rnn_outputs, [-1, 2*self.rnn_num_hidden[-1]])
 
             # 5th layer: linear projection of outputs from BiRNN
             # define weights and biases for linear projection of outputs from BiRNN
             logit_size = self.alphabet_size + 1  # +1 for the blank
-            lp_weights = tf.Variable(tf.random.normal([2 * self.rnn_num_hidden[-1], logit_size], dtype=tf.float32))
+            lp_weights = tf.Variable(tf.random.normal([2*self.rnn_num_hidden[-1], logit_size], dtype=tf.float32))
             lp_biases = tf.Variable(tf.random.normal([logit_size], dtype=tf.float32))
 
             # convert rnn_outputs into logits (apply linear projection of rnn outputs)
@@ -453,8 +454,12 @@ class AcousticModel(object):
             # Calculate the average loss across the batch
             avg_loss = tf.reduce_mean(ctc_loss)
 
-            # use AdamOptimizer to comput the gradients and minimize the average of ctc_loss (training the model)
+            # operation for updating variables in batch normalisation layers during training
+            update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+
+            # use AdamOptimizer to compute the gradients and minimize the average of ctc_loss (training the model)
             optimizer = tf.train.AdamOptimizer(learning_rate=self.lr)
+
             gradients, variables = zip(*optimizer.compute_gradients(avg_loss))
             # Gradient clipping
             if self.grad_clip == "global_norm":
@@ -465,7 +470,9 @@ class AcousticModel(object):
                 global_norm = tf.global_norm(gradients)
             else:
                 global_norm = tf.global_norm(gradients)
-            optimize = optimizer.apply_gradients(zip(gradients, variables))
+            # update_ops needs to be called for proper update of the trainable variables in batch normalization layers
+            with tf.control_dependencies(update_ops):
+                optimize = optimizer.apply_gradients(zip(gradients, variables))
 
             # decode the logits
             # TODO: create separate function for this
