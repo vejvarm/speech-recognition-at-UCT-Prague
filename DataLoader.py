@@ -3,9 +3,11 @@ import os
 
 # from icu import LocaleData
 import numpy as np
-import soundfile as sf  # for loading OGG audio file format
+import soundfile as sf  # for loading audio in various formats (OGG, WAV, FLAC, ...)
 
 from bs4 import BeautifulSoup
+
+from helpers import extract_channel
 
 
 # TODO: exclude cepstra which are longer than a set number of frames
@@ -59,13 +61,6 @@ class DataLoader:
 
         return [''.join([self.n2c_map[o] for o in arr]) for arr in arraylist]
 
-    @staticmethod
-    def extract_channel(signal, channel_number):
-        """Extract single channel from a multi-channel (stereo) signal"""
-        try:
-            return signal[:, channel_number]
-        except IndexError:
-            return signal
 
     @staticmethod
     def load_labels(folder='./data'):
@@ -187,7 +182,7 @@ class PDTSCLoader(DataLoader):
         for i, file in enumerate(self.audiofiles):
             signal, self.fs[i] = sf.read(file)
 
-            signal = self.extract_channel(signal, 0)  # convert signal from stereo to mono by extracting channel 0
+            signal = extract_channel(signal, 0)  # convert signal from stereo to mono by extracting channel 0
 
             tstart = 0
             tend = signal.shape[0]/self.fs[i]
