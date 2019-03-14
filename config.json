@@ -1,10 +1,10 @@
 {
   "best": false,
-  "debug": false,
-  "load_dir": "C:/!temp/train_same",
+  "debug": true,
+  "load_dir": "C:/!temp/train_debug",
   "save_dir": "./data/results/",
   "do_train": true,
-  "from_checkpoint": true,
+  "from_checkpoint": false,
   "checkpoint_dir": "./data/results/agent-ep_2019-0313-105322",
 
   "num_cpu_cores": 4,
@@ -12,7 +12,7 @@
 
   "random": false,
 
-  "lr": 0.0001,
+  "lr": 0.00001,
   "max_epochs": 1000,
   "batch_size": 4,
   "tt_ratio": 0.95,
@@ -48,7 +48,7 @@
   "print_layer_3": false,
   "print_dropout": false,
   "print_rnn_outputs": false,
-  "print_lr": true,
+  "print_lr": false,
   "print_gradients": false,
   "print_grad_norm": false,
   "print_labels": false
