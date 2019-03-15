@@ -498,12 +498,11 @@ class AcousticModel(object):
             with tf.name_scope("fc_logits"):
                 # define weights and biases for linear projection of outputs from BiRNN
                 logit_size = self.alphabet_size + 1  # +1 for the blank
-                lp_weights = tf.Variable(tf.random.normal([2*self.rnn_num_hidden[-1], logit_size], dtype=tf.float32))
-                lp_biases = tf.Variable(tf.random.normal([logit_size], dtype=tf.float32))
+                w5, b5 = self.ff_layer("w5", "b5", 2*self.rnn_num_hidden[-1], logit_size)
 
                 # convert rnn_outputs into logits (apply linear projection of rnn outputs)
                 # lp_outputs.shape == [batch_time*batch_size, alphabet_size + 1]
-                lp_outputs = tf.minimum(tf.nn.elu(tf.add(tf.matmul(rnn_outputs, lp_weights), lp_biases)), self.relu_clip)
+                lp_outputs = tf.minimum(tf.nn.elu(tf.add(tf.matmul(rnn_outputs, w5), b5)), self.relu_clip)
 
                 # reshape lp_outputs to shape [batch_time, batch_size, alphabet_size + 1]
                 logits = tf.reshape(lp_outputs, [-1, ph_batch_size, logit_size])
