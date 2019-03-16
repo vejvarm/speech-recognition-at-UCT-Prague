@@ -2,7 +2,7 @@ import time
 
 from models.AcousticModel import AcousticModel
 
-# TODO: feeding data in at inference -> determine what should be ran at __init_ when do_train is false
+# TODO: feeding data in at inference -> determine what should be ran at __init__ when do_train is false
 # https://stackoverflow.com/questions/50986886/how-to-inference-with-a-single-example-in-tensorflow-with-dataset-pipeline
 # TODO: Bias gradients in LSTM are absurdly high (thousands)
 # suffle the order of batches (keeps similar lengths in batch but adds variability through epochs)
