@@ -1,24 +1,23 @@
 {
   "best": false,
-  "debug": true,
-  "load_dir": "C:/!temp/train_debug",
+  "debug": false,
+  "load_dir": "C:/!temp/train_small",
   "save_dir": "./data/results/",
   "do_train": true,
   "from_checkpoint": false,
-  "checkpoint_dir": "./data/results/agent-ep_2019-0313-105322",
+  "checkpoint_dir": "./data/results/agent-ep_2019-0318-144925",
 
   "num_cpu_cores": 4,
-  "parallel_iterations": 8,
+  "parallel_iterations": 16,
 
   "random": false,
 
-  "lr": 0.00001,
   "max_epochs": 1000,
   "batch_size": 4,
-  "tt_ratio": 0.95,
+  "tt_ratio": 0.90,
   "shuffle_seed": null,
 
-  "decay_by_epochs": true,
+  "decay_by_epochs": false,
   "decay_by_length": false,
   "d_by_epo_rate": 0.5,
   "d_by_epo_steps": 10,
@@ -31,7 +30,7 @@
   "mfcc_deltas": [2, 2],
 
   "ff_num_hidden": [2048, 2048, 1024],
-  "ff_dropout": [0.2, 0.2, 0.2],
+  "ff_dropout": [0.2, 0.2, 0.1],
   "ff_batch_norm": true,
   "relu_clip": 20,
   "rnn_num_hidden": [256, 256],
@@ -40,8 +39,12 @@
   "ctc_merge_repeated": true,
   "beam_width": 128,
   "top_paths": 1,
-  "grad_clip": "local_norm",
-  "grad_clip_val": 1000,
+
+  "optimizer_choice": "amsgrad",
+  "lr": 1.0,
+  "epsilon": 0.1,
+  "grad_clip": "global_norm",
+  "grad_clip_val": 10,
 
   "show_device_placement": false,
   "print_batch_x": false,

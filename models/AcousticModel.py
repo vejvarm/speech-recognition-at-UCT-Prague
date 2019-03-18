@@ -18,6 +18,7 @@ from tensorflow.contrib import rnn, cudnn_rnn
 from DataLoader import DataLoader
 from MFCC import MFCC
 from helpers import check_equal, load_config, get_available_devices, load_speech, list_to_padded_array
+from utils.AMSGrad import AMSGrad
 
 load_cepstra = MFCC.load_cepstra  # for loading  cepstrum-###.npy files from a folder into a list of lists
 load_labels = DataLoader.load_labels  # for loading transcript-###.npy files from folder into a list of lists
@@ -64,6 +65,7 @@ class AcousticModel(object):
     ctc_merge_repeated: bool
     beam_width: int
     top_paths: int
+    optimizer_choice: str
     grad_clip: Union[str, bool]
     grad_clip_val: float
     show_device_placement: bool
@@ -144,7 +146,6 @@ class AcousticModel(object):
             pass  # TODO: random_config() for generating random configurations of the hyperparams
         else:
             # training HP
-            self.lr = self.config['lr']  # (float) learning rate
             self.max_epochs = self.config['max_epochs']  # (int) maximum number of training epochs
             self.batch_size = self.config['batch_size']  # (int) size of mini-batches during learning from epoch
             self.tt_ratio = self.config['tt_ratio']  # (float) train-test data split ratio
@@ -169,6 +170,11 @@ class AcousticModel(object):
             self.ctc_merge_repeated = self.config['ctc_merge_repeated']  # (bool)
             self.beam_width = self.config['beam_width']  # (int) beam width for the Beam Search (BS) algorithm
             self.top_paths = self.config['top_paths']  # (int) number of best paths to return from the BS algorithm
+
+            # optimizer parameters
+            self.optimizer_choice = self.config['optimizer_choice']  # (str) which optimizer should be used for train
+            self.lr = self.config['lr']  # (float) learning rate
+            self.epsilon = self.config['epsilon']  # (float) a small constant for numerical stability
             self.grad_clip = self.config['grad_clip']  # (str|bool) method to be used (False for no clipping)
             self.grad_clip_val = self.config['grad_clip_val']  # (float) value at which to clip gradient
 
@@ -387,6 +393,20 @@ class AcousticModel(object):
                 lr = tf.train.exponential_decay(lr, mean_seq_len, self.d_by_len_steps, self.d_by_len_rate)
             return lr
 
+    def optimizer_fun(self, learning_rate, epsilon):
+        if self.optimizer_choice == 'adagrad':
+            return tf.train.AdagradOptimizer(learning_rate=learning_rate)
+        elif self.optimizer_choice == 'adadelta':
+            return tf.train.AdadeltaOptimizer(learning_rate=learning_rate, epsilon=epsilon)
+        elif self.optimizer_choice == 'rmsprop':
+            return tf.train.RMSPropOptimizer(learning_rate=learning_rate, epsilon=epsilon)
+        elif self.optimizer_choice == 'adam':
+            return tf.train.AdamOptimizer(learning_rate=learning_rate, epsilon=epsilon)
+        elif self.optimizer_choice == 'amsgrad':
+            return AMSGrad(learning_rate=learning_rate, epsilon=epsilon)
+        else:
+            raise NameError("Name of optimizer from config not found in available optimizers.")
+
     def build_graph(self):
 
         devices = get_available_devices()
@@ -531,10 +551,7 @@ class AcousticModel(object):
                 lr = self.decaying_learning_rate()
 
                 # use AdamOptimizer to compute the gradients and minimize the average of ctc_loss (training the model)
-                optimizer = tf.train.AdamOptimizer(learning_rate=lr)
-                # optimizer = tf.train.AdagradOptimizer(learning_rate=lr)
-                # optimizer = tf.train.AdadeltaOptimizer(learning_rate=lr)
-                # optimizer = tf.train.RMSPropOptimizer(learning_rate=lr)
+                optimizer = self.optimizer_fun(learning_rate=lr, epsilon=self.epsilon)
 
                 gradients, variables = zip(*optimizer.compute_gradients(mean_loss))
                 # Gradient clipping
