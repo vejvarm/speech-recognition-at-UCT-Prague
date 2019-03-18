@@ -184,6 +184,8 @@ class AcousticModel(object):
         self.print_labels = self.config['print_labels']
 
         # SUMMARIES #
+        self.smr_total_loss = None
+        self.smr_mean_cer = None
         self.merged_summaries = None
 
         # PRINT OPERATIONS #
@@ -227,11 +229,7 @@ class AcousticModel(object):
         self.sw_train = tf.summary.FileWriter(self.checkpoint_save_path + '/train', self.sess.graph)
         self.sw_test = tf.summary.FileWriter(self.checkpoint_save_path + '/test')
 
-        # TODO: train(), infer()
-        # if self.do_train:
-        #    self.train()
-        # else:
-        #    self.infer()
+        # Initialize the model
         self.init()
 
     def load_data(self):
@@ -266,10 +264,6 @@ class AcousticModel(object):
             raise ValueError("The number of features is not identical in all loaded cepstrum files.")
         # get number of time frames of the longest cepstrum
         self.max_time = max(cepstrum.shape[0] for cepstrum in cepstra)
-
-        # shuffle cepstra and labels the same way so that they are still aligned
-        # !!! TODO: uncomment or make shuffle part of dataset pipeline!
-        # cepstra, labels = random_shuffle(cepstra, labels, self.shuffle_seed)
 
         # split cepstra and labels into traning and testing parts
         len_train = int(self.tt_ratio * self.num_data)  # length of the training data
@@ -325,7 +319,6 @@ class AcousticModel(object):
                               0,  # size(cepstrum) -- unused
                               0)  # size(label) -- unused
 
-            # TODO: make it work for drop_remainder=False
             ds_train = self.ds_train.padded_batch(self.batch_size, padded_shapes, padding_values,
                                                   drop_remainder=True)
             ds_test = self.ds_test.padded_batch(self.batch_size, padded_shapes, padding_values,
@@ -373,8 +366,6 @@ class AcousticModel(object):
         return bn
 
     def lstm_cell(self, num_hidden):
-        # TODO: try to use tf.contrib.cudnn_rnn.CudnnLSTM(num_units=self.rnn_num_hidden, state_is_tuple=True)
-        # TODO: Batch Normalization at LSTM outputs (before the activation function)
         return rnn.LSTMBlockCell(num_units=num_hidden, use_peephole=self.rnn_use_peephole)
         # cell = rnn.LSTMBlockFusedCell(num_units=num_hidden)
         # return cudnn_rnn.CudnnCompatibleLSTMCell(num_hidden, use_peephole=self.rnn_use_peephole)
@@ -397,7 +388,6 @@ class AcousticModel(object):
             return lr
 
     def build_graph(self):
-        # TODO: inputs and labels
 
         devices = get_available_devices()
 
@@ -413,7 +403,7 @@ class AcousticModel(object):
 
             # Step tracking tensors and update ops
             self.global_step = tf.Variable(0, trainable=False, name='global_step', dtype=tf.int32)
-            self.batch_no = tf.Variable(0, trainable=False, name='global_step', dtype=tf.int32)
+            self.batch_no = tf.Variable(0, trainable=False, name='batch_no', dtype=tf.int32)
             self.increment_global_step_op = tf.assign_add(self.global_step, 1)
             self.increment_batch_no_op = tf.assign_add(self.batch_no, 1)
             self.reset_batch_no = tf.assign(self.batch_no, 0)
@@ -479,17 +469,17 @@ class AcousticModel(object):
                 with tf.name_scope("birnn"):
                     cells_fw = [self.lstm_cell(n) for n in self.rnn_num_hidden]  # list of forward direction cells
                     cells_bw = [self.lstm_cell(n) for n in self.rnn_num_hidden]  # list of backward direction cells
-#                    initial_states_fw = [rnn.LSTMStateTuple(tf.truncated_normal([ph_batch_size, n], stddev=0.00001),
-#                                         tf.truncated_normal([ph_batch_size, n], stddev=0.001))
-#                                         for n in self.rnn_num_hidden]
-#                    initial_states_bw = [rnn.LSTMStateTuple(tf.truncated_normal([ph_batch_size, n], stddev=0.00001),
-#                                         tf.truncated_normal([ph_batch_size, n], stddev=0.001))
-#                                         for n in self.rnn_num_hidden]
+                    initial_states_fw = [rnn.LSTMStateTuple(tf.truncated_normal([ph_batch_size, n], stddev=0.0001),
+                                         tf.truncated_normal([ph_batch_size, n], stddev=0.0001))
+                                         for n in self.rnn_num_hidden]
+                    initial_states_bw = [rnn.LSTMStateTuple(tf.truncated_normal([ph_batch_size, n], stddev=0.0001),
+                                         tf.truncated_normal([ph_batch_size, n], stddev=0.0001))
+                                         for n in self.rnn_num_hidden]
                     rnn_outputs, _, _ = rnn.stack_bidirectional_dynamic_rnn(cells_fw,
                                                                             cells_bw,
                                                                             inputs=layer_3,
-#                                                                            initial_states_fw=initial_states_fw,
-#                                                                            initial_states_bw=initial_states_bw,
+                                                                            initial_states_fw=initial_states_fw,
+                                                                            initial_states_bw=initial_states_bw,
                                                                             dtype=tf.float32,
                                                                             sequence_length=ph_size_x,
                                                                             parallel_iterations=self.parallel_iterations,
@@ -541,10 +531,10 @@ class AcousticModel(object):
                 lr = self.decaying_learning_rate()
 
                 # use AdamOptimizer to compute the gradients and minimize the average of ctc_loss (training the model)
-                # optimizer = tf.train.AdamOptimizer(learning_rate=lr)
+                optimizer = tf.train.AdamOptimizer(learning_rate=lr)
                 # optimizer = tf.train.AdagradOptimizer(learning_rate=lr)
                 # optimizer = tf.train.AdadeltaOptimizer(learning_rate=lr)
-                optimizer = tf.train.RMSPropOptimizer(learning_rate=lr)
+                # optimizer = tf.train.RMSPropOptimizer(learning_rate=lr)
 
                 gradients, variables = zip(*optimizer.compute_gradients(mean_loss))
                 # Gradient clipping
@@ -600,8 +590,8 @@ class AcousticModel(object):
 
             # SUMMARIES
             with tf.name_scope("summaries"):
-                tf.summary.scalar('total_loss', self.total_loss)
-                tf.summary.scalar('mean_cer', self.epoch_mean_cer)
+                self.smr_total_loss = tf.summary.scalar('total_loss', self.total_loss)
+                self.smr_mean_cer = tf.summary.scalar('mean_cer', self.epoch_mean_cer)
 
                 self.merged_summaries = tf.summary.merge_all()
 
@@ -651,10 +641,7 @@ class AcousticModel(object):
         self.sess.run(self.inputs["init_train"])
         print("\n_____TRAINING DATA_____")
         train_tensors = [self.outputs["mean_loss"],
-                         self.outputs["ctc_outputs"],
-                         self.outputs["mean_cer"],
                          self.increment_total_loss,
-                         self.update_epoch_mean_cer,
                          self.outputs["optimize"]]
         if self.config["debug"]:
             if self.print_batch_x:
@@ -677,23 +664,19 @@ class AcousticModel(object):
             with tqdm(range(num_train_batches), unit="batch") as timer:
                 while True:
                     _, batch_no = self.sess.run([self.increment_batch_no_op, self.batch_no])
-                    mean_loss, output, mean_cer, *_ = self.sess.run(train_tensors,
-                                                                    feed_dict={"ph_batch_size:0": self.batch_size,
-                                                                               "ph_is_train:0": True,
-                                                                               "ph_ff_dropout:0": self.ff_dropout})
+                    mean_loss, *_ = self.sess.run(train_tensors,
+                                                  feed_dict={"ph_batch_size:0": self.batch_size,
+                                                             "ph_is_train:0": True,
+                                                             "ph_ff_dropout:0": self.ff_dropout})
                     timer.update(1)
                     if batch_no % 10 == 0:
-                        print("BATCH {} | Loss {} | Error {}".format(batch_no, mean_loss, mean_cer))
+                        print("BATCH {} | Loss {}".format(batch_no, mean_loss))
         except tf.errors.OutOfRangeError:
-            # update train summary
-            summary, total_loss, epoch_mean_cer = self.sess.run([self.merged_summaries,
-                                                                 self.total_loss,
-                                                                 self.epoch_mean_cer])
+            # update train summary (only with total loss)
+            summary, total_loss = self.sess.run([self.smr_total_loss, self.total_loss])
             self.sw_train.add_summary(summary, epoch)
             # print results to console
             print("Total Loss: {}".format(total_loss))
-            print("Mean CER: {}".format(epoch_mean_cer))
-            print("Output Example: {}".format("".join([DataLoader.n2c_map[c] for c in output[0][0, :] if c != -1])))
             # reset summary variables
             self.sess.run([self.reset_total_loss, self.reset_batch_no])
 
@@ -722,7 +705,7 @@ class AcousticModel(object):
                     if batch_no % 5 == 0:
                         print("BATCH {} | Loss {} | Error {}".format(batch_no, mean_loss, mean_cer))
         except tf.errors.OutOfRangeError:
-            # update test summary
+            # update test summary (with total loss and character error rate)
             summary, total_loss, epoch_mean_cer = self.sess.run([self.merged_summaries,
                                                                  self.total_loss,
                                                                  self.epoch_mean_cer])
