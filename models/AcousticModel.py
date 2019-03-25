@@ -355,9 +355,17 @@ class AcousticModel(object):
                            "init_test": iterator_test_init}
 
     @staticmethod
-    def ff_layer(w_name, b_name, input_size, output_size):
-        w = tf.Variable(tf.truncated_normal([input_size, output_size], stddev=0.001), name=w_name)
-        b = tf.Variable(tf.truncated_normal([output_size], stddev=0.001), name=b_name)
+    def conv_layer(x, filters, stride, padding, initializer):
+        return tf.nn.conv1d(x, filters, stride, padding)
+
+    @staticmethod
+    def ff_layer(w_name, b_name, input_size, output_size, initializer=None):
+        if initializer:
+            w = tf.Variable(initializer([input_size, output_size]), name=w_name)
+            b = tf.Variable(initializer([input_size, output_size]), name=b_name)
+        else:
+            w = tf.Variable(tf.truncated_normal([input_size, output_size], stddev=0.001), name=w_name)
+            b = tf.Variable(tf.truncated_normal([output_size], stddev=0.001), name=b_name)
         return w, b
 
     @staticmethod
@@ -372,7 +380,8 @@ class AcousticModel(object):
         return bn
 
     def lstm_cell(self, num_hidden):
-        return rnn.LSTMBlockCell(num_units=num_hidden, use_peephole=self.rnn_use_peephole)
+        # return rnn.LSTMBlockCell(num_units=num_hidden, use_peephole=self.rnn_use_peephole)
+        return rnn.GRUBlockCellV2(num_units=num_hidden)
         # cell = rnn.LSTMBlockFusedCell(num_units=num_hidden)
         # return cudnn_rnn.CudnnCompatibleLSTMCell(num_hidden, use_peephole=self.rnn_use_peephole)
         # return tf.contrib.grid_rnn.Grid1LSTMCell(num_units=num_hidden, state_is_tuple=True)
@@ -410,6 +419,7 @@ class AcousticModel(object):
     def build_graph(self):
 
         devices = get_available_devices()
+        initializer = tf.contrib.layers.xavier_initializer()
 
         with self.graph.as_default():
 
@@ -438,7 +448,7 @@ class AcousticModel(object):
 
                 # feed forward layers
                 # 1st layer
-                with tf.variable_scope("layer_1") as scope:
+                with tf.variable_scope("layer_1", initializer=initializer) as scope:
                     with tf.name_scope("fc_1"):
                         w1, b1 = self.ff_layer("w1", "b1", self.num_features, self.ff_num_hidden[0])
                         layer_1 = tf.add(tf.matmul(batch_x, w1), b1)
@@ -448,11 +458,11 @@ class AcousticModel(object):
                             layer_1 = tf.reshape(layer_1, [-1, self.ff_num_hidden[0]])
                         # layer_1 = tf.minimum(tf.nn.relu(layer_1), self.relu_clip)
                         # layer_1 = tf.tanh(layer_1)
-                        layer_1 = tf.minimum(tf.nn.elu(layer_1), self.relu_clip)
+                        layer_1 = tf.minimum(tf.nn.relu(layer_1), self.relu_clip)
                         layer_1 = tf.nn.dropout(layer_1, keep_prob=(1.0 - ph_ff_dropout[0]))
 
                 # 2nd layer
-                with tf.variable_scope("layer_2") as scope:
+                with tf.variable_scope("layer_2", initializer=initializer) as scope:
                     with tf.name_scope("fc_2"):
                         w2, b2 = self.ff_layer("w2", "b2", self.ff_num_hidden[0], self.ff_num_hidden[1])
                         layer_2 = tf.add(tf.matmul(layer_1, w2), b2)
@@ -462,11 +472,11 @@ class AcousticModel(object):
                             layer_2 = tf.reshape(layer_2, [-1, self.ff_num_hidden[1]])
                         # layer_2 = tf.minimum(tf.nn.relu(layer_2), self.relu_clip)
                         # layer_2 = tf.tanh(layer_2)
-                        layer_2 = tf.minimum(tf.nn.elu(layer_2), self.relu_clip)
+                        layer_2 = tf.minimum(tf.nn.relu(layer_2), self.relu_clip)
                         layer_2 = tf.nn.dropout(layer_2, keep_prob=(1.0 - ph_ff_dropout[1]))
 
                 # 3rd layer
-                with tf.variable_scope("layer_3") as scope:
+                with tf.variable_scope("layer_3", initializer=initializer) as scope:
                     with tf.name_scope("fc_3"):
                         w3, b3 = self.ff_layer("w3", "b3", self.ff_num_hidden[1], self.ff_num_hidden[2])
                         layer_3 = tf.add(tf.matmul(layer_2, w3), b3)
@@ -476,7 +486,7 @@ class AcousticModel(object):
                             layer_3 = tf.reshape(layer_3, [-1, self.ff_num_hidden[2]])
                         # layer_3 = tf.minimum(tf.nn.relu(layer_3), self.relu_clip)
                         # layer_3 = tf.tanh(layer_3)
-                        layer_3 = tf.minimum(tf.nn.elu(layer_3), self.relu_clip)
+                        layer_3 = tf.minimum(tf.nn.relu(layer_3), self.relu_clip)
                         layer_3 = tf.nn.dropout(layer_3, keep_prob=(1.0 - ph_ff_dropout[2]))
                         # reshape back to [batch_size, batch_time, ff_num_hidden[2]]
                         layer_3 = tf.reshape(layer_3, [ph_batch_size, -1, self.ff_num_hidden[2]])
@@ -485,21 +495,25 @@ class AcousticModel(object):
 
             # 4th layer: stacked BiRNN with LSTM cells
             # TODO: LSTM might become a computational bottleneck
-            with tf.variable_scope("layer_4") as scope:
+            with tf.variable_scope("layer_4", initializer=initializer):
                 with tf.name_scope("birnn"):
                     cells_fw = [self.lstm_cell(n) for n in self.rnn_num_hidden]  # list of forward direction cells
                     cells_bw = [self.lstm_cell(n) for n in self.rnn_num_hidden]  # list of backward direction cells
-                    initial_states_fw = [rnn.LSTMStateTuple(tf.truncated_normal([ph_batch_size, n], stddev=0.0001),
-                                         tf.truncated_normal([ph_batch_size, n], stddev=0.0001))
-                                         for n in self.rnn_num_hidden]
-                    initial_states_bw = [rnn.LSTMStateTuple(tf.truncated_normal([ph_batch_size, n], stddev=0.0001),
-                                         tf.truncated_normal([ph_batch_size, n], stddev=0.0001))
-                                         for n in self.rnn_num_hidden]
+#                    initial_states_fw = [tf.truncated_normal([ph_batch_size, n], stddev=0.0001)
+#                                         for n in self.rnn_num_hidden]
+#                    initial_states_bw = [tf.truncated_normal([ph_batch_size, n], stddev=0.0001)
+#                                         for n in self.rnn_num_hidden]
+#                    initial_states_fw = [rnn.LSTMStateTuple(tf.truncated_normal([ph_batch_size, n], stddev=0.0001),
+#                                         tf.truncated_normal([ph_batch_size, n], stddev=0.0001))
+#                                         for n in self.rnn_num_hidden]
+#                    initial_states_bw = [rnn.LSTMStateTuple(tf.truncated_normal([ph_batch_size, n], stddev=0.0001),
+#                                         tf.truncated_normal([ph_batch_size, n], stddev=0.0001))
+#                                         for n in self.rnn_num_hidden]
                     rnn_outputs, _, _ = rnn.stack_bidirectional_dynamic_rnn(cells_fw,
                                                                             cells_bw,
                                                                             inputs=layer_3,
-                                                                            initial_states_fw=initial_states_fw,
-                                                                            initial_states_bw=initial_states_bw,
+                                                                            # initial_states_fw=initial_states_fw,
+                                                                            # initial_states_bw=initial_states_bw,
                                                                             dtype=tf.float32,
                                                                             sequence_length=ph_size_x,
                                                                             parallel_iterations=self.parallel_iterations,
@@ -507,21 +521,21 @@ class AcousticModel(object):
                     # rnn_outputs: Tensor of shape [batch_time, batch_size, 2*num_hidden]
 
                     # apply clipped ELU activation to the rnn outputs
-                    rnn_outputs = tf.minimum(tf.nn.elu(rnn_outputs), self.relu_clip)
+                    rnn_outputs = tf.minimum(tf.nn.relu(rnn_outputs), self.relu_clip)
 
                     # Reshape output from a tensor of shape [batch_time, batch_size, 2*num_hidden]
                     # to a tensor of shape [batch_time*batch_size, 2*num_hidden]
                     rnn_outputs = tf.reshape(rnn_outputs, [-1, 2*self.rnn_num_hidden[-1]])
 
             # 5th layer: linear projection of outputs from BiRNN
-            with tf.name_scope("fc_logits"):
+            with tf.variable_scope("fc_logits", initializer=initializer):
                 # define weights and biases for linear projection of outputs from BiRNN
                 logit_size = self.alphabet_size + 1  # +1 for the blank
                 w5, b5 = self.ff_layer("w5", "b5", 2*self.rnn_num_hidden[-1], logit_size)
 
                 # convert rnn_outputs into logits (apply linear projection of rnn outputs)
                 # lp_outputs.shape == [batch_time*batch_size, alphabet_size + 1]
-                lp_outputs = tf.minimum(tf.nn.elu(tf.add(tf.matmul(rnn_outputs, w5), b5)), self.relu_clip)
+                lp_outputs = tf.minimum(tf.nn.relu(tf.add(tf.matmul(rnn_outputs, w5), b5)), self.relu_clip)
 
                 # reshape lp_outputs to shape [batch_time, batch_size, alphabet_size + 1]
                 logits = tf.reshape(lp_outputs, [-1, ph_batch_size, logit_size])
@@ -536,6 +550,8 @@ class AcousticModel(object):
                                           sequence_length=ph_size_x,
                                           preprocess_collapse_repeated=self.ctc_collapse_repeated,
                                           ctc_merge_repeated=self.ctc_merge_repeated)
+
+                # TODO: ctc_loss_v2 in r1.13
 
                 # Calculate the size normalized average loss across the batch
                 mean_loss = tf.reduce_mean(tf.divide(ctc_loss, tf.cast(ph_size_x, tf.float32)))

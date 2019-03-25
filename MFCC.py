@@ -35,9 +35,10 @@ class MFCC:
         self.cepstrums = kwargs['cepstrums'] if 'cepstrums' in kwargs else slice(1, 13)  # 1
 
         # initialize containers
-        self.power_sfft = (np.asarray(0, dtype=np.float32),)          # tuple for power density of sffted frames
-        self.filterbanks = np.zeros((self.nbanks, self.nfft//2 + 1))  # filters to be applied to power_sfft
-        self.log_sum = (np.asarray(0, dtype=np.float32),)             # log10 of matmul(power_sfft, filterbanks)
+        self.stft = (np.asarray(0, dtype=np.float32), )               # tuple for sffted frames
+        self.power_stft = (np.asarray(0, dtype=np.float32),)          # tuple for power density of sffted frames
+        self.filterbanks = np.zeros((self.nbanks, self.nfft//2 + 1))  # filters to be applied to power_stft
+        self.log_sum = (np.asarray(0, dtype=np.float32),)             # log10 of matmul(power_stft, filterbanks)
 
     def transform_data(self, deltas=(0, 0)):
 
@@ -45,10 +46,10 @@ class MFCC:
         frames = self.make_frames(data, self.fs, self.framewidth, self.framestride)
         hamminged = self.hamming(frames)
         fft = self.fourier_transform(hamminged, self.nfft)
-        power_sfft = self.power_spectrum(fft)
+        power_stft = self.power_spectrum(fft)
         freq_idxs = self.mel_scaled_frequency_range()
         triangles = self.triangular_filterbanks(freq_idxs)
-        log_sum = self.log_sum_of_filtered_frames(power_sfft, triangles)
+        log_sum = self.log_sum_of_filtered_frames(power_stft, triangles)
         mfcc = self.discrete_cosine_transform(log_sum)
         mfcc_standard = self.standardize(mfcc)
 
@@ -131,8 +132,7 @@ class MFCC:
 
         return hamminged_data
 
-    @staticmethod
-    def fourier_transform(framed_data, nfft=512):
+    def fourier_transform(self, framed_data, nfft=512):
         """Apply fast fourier transform to frames of a real input signal from rows of framed_data"""
         nr = len(framed_data)
         fft_transformed = [np.array(0, dtype=np.float32)] * nr
@@ -140,11 +140,13 @@ class MFCC:
         for i, row in enumerate(framed_data):
             fft_transformed[i] = np.fft.rfft(a=row, n=nfft, axis=1)[:, :int(nfft/2 + 1)]
 
+        self.stft = fft_transformed
+
         return fft_transformed
 
     def power_spectrum(self, framed_fft):
-        self.power_sfft = tuple(1 / self.nfft * (np.abs(row) ** 2) for row in framed_fft)
-        return self.power_sfft
+        self.power_stft = tuple(1 / self.nfft * (np.abs(row) ** 2) for row in framed_fft)
+        return self.power_stft
 
     @staticmethod
     def mel_scale(freq_input):

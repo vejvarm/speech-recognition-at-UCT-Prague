@@ -52,7 +52,7 @@ if __name__ == '__main__':
     cepstra = mfcc.transform_data()
     cepstraDelta = mfcc.transform_data(deltas=(2, 0))
     cepstraDelta2 = mfcc.transform_data(deltas=(2, 2))
-    power_sfft = mfcc.power_sfft[0]
+    power_sfft = mfcc.power_stft[0]
     log_sum = mfcc.log_sum[0]
 
     timespan = np.arange(len(audio)) / fs

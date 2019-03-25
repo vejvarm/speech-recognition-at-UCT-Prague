@@ -29,11 +29,11 @@
 
   "mfcc_deltas": [2, 2],
 
-  "ff_num_hidden": [2048, 2048, 1024],
+  "ff_num_hidden": [2048, 1024, 512],
   "ff_dropout": [0.2, 0.2, 0.1],
   "ff_batch_norm": true,
   "relu_clip": 20,
-  "rnn_num_hidden": [256, 256],
+  "rnn_num_hidden": [512, 512],
   "rnn_use_peephole": true,
   "ctc_collapse_repeated": true,
   "ctc_merge_repeated": true,
@@ -41,7 +41,7 @@
   "top_paths": 1,
 
   "optimizer_choice": "amsgrad",
-  "lr": 1.0,
+  "lr": 0.01,
   "epsilon": 0.1,
   "grad_clip": "global_norm",
   "grad_clip_val": 10,
