@@ -55,6 +55,15 @@ class AcousticModel(object):
     d_by_epo_steps: int
     d_by_len_rate: float
     d_by_len_steps: int
+    conv_switch = bool
+    conv_filter_dims = List[List[int]]
+    conv_in_channels = List[int]
+    conv_out_channels = List[int]
+    conv_strides = List[List[int]]
+    conv_padding = bool
+    conv_dilations = List[List[int]]
+    conv_batch_norm = bool
+    ff_switch: bool
     ff_num_hidden: List[int]
     ff_dropout: List[float]
     ff_batch_norm: bool
@@ -160,12 +169,26 @@ class AcousticModel(object):
             self.d_by_len_steps = self.config['d_by_len_steps']
 
             # AcousticModel specific HP
+            # 1D or 2D convolution layers at the beginning
+            self.conv_switch = self.config['conv_switch']  # (bool) if true, conv layers will be added to start of model
+            self.conv_filter_dims = self.config['conv_filter_dims']  # (list) dimensions of filters for each conv layer
+            self.conv_in_channels = self.config['conv_in_channels']  # (list) n of input channels in each conv layer
+            self.conv_out_channels = self.config['conv_out_channels']  # (list) n of output channels in each conv layer
+            self.conv_strides = self.config['conv_strides']  # (list) strides of filters for each conv. layer
+            self.conv_padding = self.config['conv_padding']  # (bool) type of padding of the input to the convolution
+            self.conv_dilations = self.config['conv_dilations']  # (list) dilation in time, freq dimensions
+            self.conv_batch_norm = self.config['conv_batch_norm']  # (bool) use batch normalization in conv. layers
+
+            # Feed-Forward layers (old)
+            self.ff_switch = self.config['ff_switch']  # (bool) if true, ff layers will be added after the conv layers
             self.ff_num_hidden = self.config['ff_num_hidden']  # (list of ints) hidden units in feed forward layers
             self.ff_dropout = self.config['ff_dropout']  # (list of floats) dropouts after each feed forward layer
             self.ff_batch_norm = self.config['ff_batch_norm']  # (bool) use batch normalisation in feed forward layers
             self.relu_clip = self.config['relu_clip']  # (float) preventing exploding gradient with relu clipping
+
             self.rnn_num_hidden = self.config['rnn_num_hidden']  # (list of ints) number of hidden units in LSTM cells
             self.rnn_use_peephole = self.config['rnn_use_peephole']  # (bool) use peephole connections in the LSTM cells
+
             self.ctc_collapse_repeated = self.config['ctc_collapse_repeated']  # (bool)
             self.ctc_merge_repeated = self.config['ctc_merge_repeated']  # (bool)
             self.beam_width = self.config['beam_width']  # (int) beam width for the Beam Search (BS) algorithm
@@ -354,9 +377,59 @@ class AcousticModel(object):
                            "init_train": iterator_train_init,
                            "init_test": iterator_test_init}
 
+    def conv_layer(self, x, filt_dims, stride, in_channels=1, out_channels=1, dilation=(1, 1), padding='SAME',
+                   data_format="NCHW", batch_norm=False, is_train=True, initializer=None,
+                   filt_name='filter', name='conv', scope='conv'):
+        """
+
+        :param x: (tensor) input to the convolutional layer [batch_size, in_channels==1, time_size, freq_size]
+        :param filt_dims: (list) dimensions of the kernel through time and frequency [filt_time_size, filt_freq_size]
+        :param stride: (list) stride of the convolution filter (kernel) [time_stride, freq_stride]
+        :param in_channels: (int) number of input channels in x
+        :param out_channels: (int) number of output channels of the convolution
+        :param padding: (str) type of padding ('SAME' for padding to input size, 'VALID' for no padding)
+        :param data_format: (str) order of the dimensions in the input
+        :param dilation: (list) dilation of the convolution filter in HW dimensions [time_dilation, freq_dilation]
+        :param batch_norm: (bool) use batch normalization or not
+        :param is_train: (bool) indicator for batch normalization if it is in trainig/inference phase
+        :param initializer: initializer for the filter variable
+        :param filt_name: (str) name of the filter variable
+        :param name: (str) name of the convolution layer
+        :param scope: (str) variable scope
+        :return: (tensor) convolution of x using kernel filt [batch_size, out_channels, time_size, freq_size]
+        """
+        assert len(filt_dims) == 2, "filt_dims must be a list/tuple with 2 elements"
+        assert len(stride) == 2, "stride must be a list/tuple with 2 elements"
+
+        strides = [1, 1]
+        dilations = [1, 1]
+        strides.extend(stride)
+        dilations.extend(dilation)
+
+        with tf.variable_scope(scope):
+            if initializer:
+                filt = tf.Variable(initializer([filt_dims[0], filt_dims[1], in_channels, out_channels]), name=filt_name)
+            else:
+                filt = tf.Variable(tf.truncated_normal([filt_dims[0], filt_dims[1], in_channels, out_channels],
+                                                       stddev=0.001), name=filt_name)
+
+            conv = tf.nn.conv2d(x, filt, strides, padding, data_format=data_format, dilations=dilations, name=name)
+
+            if batch_norm:
+                conv = self.batch_norm_layer(conv, is_train, scope)
+
+            return conv
+
     @staticmethod
-    def conv_layer(x, filters, stride, padding, initializer):
-        return tf.nn.conv1d(x, filters, stride, padding)
+    def conv_layer_output_size(input_size, filt_time_size, filt_time_stride, padding="SAME", scope='conv_size'):
+        with tf.variable_scope(scope):
+            if padding == "SAME":
+                time_size = 1
+            elif padding == "VALID":
+                time_size = filt_time_size
+            else:
+                raise ValueError('padding argument must be SAME or VALID')
+            return tf.cast(tf.ceil(tf.divide(input_size - filt_time_size, filt_time_stride)), dtype=tf.int32)
 
     @staticmethod
     def ff_layer(w_name, b_name, input_size, output_size, initializer=None):
@@ -443,55 +516,46 @@ class AcousticModel(object):
             self.epoch_mean_cer = tf.Variable(0, trainable=False, name='epoch_mean_cer', dtype=tf.float32)
 
             # reshaping from [batch_size, batch_time, num_features] to [batch_size*batch_time, num_features]
-            with tf.device(devices["cpu"][0]):
-                batch_x = tf.reshape(ph_x, [-1, self.num_features])  # reshape to [batch_size*batch_time, num_features]
+#            with tf.device(devices["gpu"][0]):
 
-                # feed forward layers
-                # 1st layer
-                with tf.variable_scope("layer_1", initializer=initializer) as scope:
-                    with tf.name_scope("fc_1"):
-                        w1, b1 = self.ff_layer("w1", "b1", self.num_features, self.ff_num_hidden[0])
-                        layer_1 = tf.add(tf.matmul(batch_x, w1), b1)
-                        if self.ff_batch_norm:
-                            layer_1 = tf.reshape(layer_1, [ph_batch_size, -1, self.ff_num_hidden[0]])
-                            layer_1 = self.batch_norm_layer(layer_1, ph_is_train, scope)
-                            layer_1 = tf.reshape(layer_1, [-1, self.ff_num_hidden[0]])
-                        # layer_1 = tf.minimum(tf.nn.relu(layer_1), self.relu_clip)
-                        # layer_1 = tf.tanh(layer_1)
-                        layer_1 = tf.minimum(tf.nn.relu(layer_1), self.relu_clip)
-                        layer_1 = tf.nn.dropout(layer_1, keep_prob=(1.0 - ph_ff_dropout[0]))
+            # convolutional layers
+            if self.conv_switch:
+                assert len(self.conv_filter_dims) == len(self.conv_in_channels)
+                assert len(self.conv_in_channels) == len(self.conv_out_channels)
+                assert len(self.conv_out_channels) == len(self.conv_strides)
+                assert len(self.conv_strides) == len(self.conv_dilations)
 
-                # 2nd layer
-                with tf.variable_scope("layer_2", initializer=initializer) as scope:
-                    with tf.name_scope("fc_2"):
-                        w2, b2 = self.ff_layer("w2", "b2", self.ff_num_hidden[0], self.ff_num_hidden[1])
-                        layer_2 = tf.add(tf.matmul(layer_1, w2), b2)
-                        if self.ff_batch_norm:
-                            layer_2 = tf.reshape(layer_2, [ph_batch_size, -1, self.ff_num_hidden[1]])
-                            layer_2 = self.batch_norm_layer(layer_2, ph_is_train, scope)
-                            layer_2 = tf.reshape(layer_2, [-1, self.ff_num_hidden[1]])
-                        # layer_2 = tf.minimum(tf.nn.relu(layer_2), self.relu_clip)
-                        # layer_2 = tf.tanh(layer_2)
-                        layer_2 = tf.minimum(tf.nn.relu(layer_2), self.relu_clip)
-                        layer_2 = tf.nn.dropout(layer_2, keep_prob=(1.0 - ph_ff_dropout[1]))
+                # prepare params for stacked layers
+                conv_params = list(zip(self.conv_filter_dims, self.conv_strides,
+                                       self.conv_in_channels, self.conv_out_channels,
+                                       self.conv_dilations))
+                conv_size_params = list(zip([x[0] for x in self.conv_filter_dims],
+                                            [x[0] for x in self.conv_strides]))
 
-                # 3rd layer
-                with tf.variable_scope("layer_3", initializer=initializer) as scope:
-                    with tf.name_scope("fc_3"):
-                        w3, b3 = self.ff_layer("w3", "b3", self.ff_num_hidden[1], self.ff_num_hidden[2])
-                        layer_3 = tf.add(tf.matmul(layer_2, w3), b3)
-                        if self.ff_batch_norm:
-                            layer_3 = tf.reshape(layer_3, [ph_batch_size, -1, self.ff_num_hidden[2]])
-                            layer_3 = self.batch_norm_layer(layer_3, ph_is_train, scope)
-                            layer_3 = tf.reshape(layer_3, [-1, self.ff_num_hidden[2]])
-                        # layer_3 = tf.minimum(tf.nn.relu(layer_3), self.relu_clip)
-                        # layer_3 = tf.tanh(layer_3)
-                        layer_3 = tf.minimum(tf.nn.relu(layer_3), self.relu_clip)
-                        layer_3 = tf.nn.dropout(layer_3, keep_prob=(1.0 - ph_ff_dropout[2]))
-                        # reshape back to [batch_size, batch_time, ff_num_hidden[2]]
-                        layer_3 = tf.reshape(layer_3, [ph_batch_size, -1, self.ff_num_hidden[2]])
-                        # transpose into time major tensor [batch_time, batch_size, ff_num_hidden[2]] for the rnn input
-                        layer_3 = tf.transpose(layer_3, [1, 0, 2])
+                # reshape ph_x to [batch_size, 1, batch_time, num_features]
+                batch_x = tf.reshape(ph_x, (ph_batch_size, 1, -1, self.num_features))
+
+                conv_layer = tf.contrib.layers.stack(batch_x,
+                                                     self.conv_layer,
+                                                     conv_params,
+                                                     padding=self.conv_padding,
+                                                     batch_norm=self.conv_batch_norm,
+                                                     is_train=ph_is_train,
+                                                     initializer=initializer,
+                                                     scope='conv')
+
+                # get the time dimension size after convolutions
+                conv_output_size = tf.contrib.layers.stack(ph_size_x,
+                                                           self.conv_layer_output_size,
+                                                           conv_size_params,
+                                                           padding=self.conv_padding,
+                                                           scope='conv_size')
+
+                # transpose dimensions to [batch_time, batch_size, num_features, out_channels]
+                conv_layer = tf.transpose(conv_layer, [2, 0, 3, 1])
+                # reshape to [batch_time, batch_size, num_features*out_channels]
+                conv_layer = tf.reshape(conv_layer, (-1, ph_batch_size, self.num_features*self.conv_out_channels[-1]))
+
 
             # 4th layer: stacked BiRNN with LSTM cells
             # TODO: LSTM might become a computational bottleneck
@@ -511,11 +575,11 @@ class AcousticModel(object):
 #                                         for n in self.rnn_num_hidden]
                     rnn_outputs, _, _ = rnn.stack_bidirectional_dynamic_rnn(cells_fw,
                                                                             cells_bw,
-                                                                            inputs=layer_3,
+                                                                            inputs=conv_layer,
                                                                             # initial_states_fw=initial_states_fw,
                                                                             # initial_states_bw=initial_states_bw,
                                                                             dtype=tf.float32,
-                                                                            sequence_length=ph_size_x,
+                                                                            sequence_length=conv_output_size,
                                                                             parallel_iterations=self.parallel_iterations,
                                                                             time_major=True)
                     # rnn_outputs: Tensor of shape [batch_time, batch_size, 2*num_hidden]
@@ -547,7 +611,7 @@ class AcousticModel(object):
             # calculate ctc loss of logits
             with tf.name_scope("ctc_loss"):
                 ctc_loss = tf.nn.ctc_loss(labels=labels, inputs=logits,
-                                          sequence_length=ph_size_x,
+                                          sequence_length=conv_output_size,
                                           preprocess_collapse_repeated=self.ctc_collapse_repeated,
                                           ctc_merge_repeated=self.ctc_merge_repeated)
 
@@ -586,7 +650,7 @@ class AcousticModel(object):
             # decode the logits
             with tf.name_scope("outputs"):
                 ctc_outputs, ctc_log_probs = tf.nn.ctc_beam_search_decoder(inputs=logits,
-                                                                           sequence_length=ph_size_x,
+                                                                           sequence_length=conv_output_size,
                                                                            beam_width=self.beam_width,
                                                                            top_paths=self.top_paths,
                                                                            merge_repeated=self.ctc_merge_repeated)

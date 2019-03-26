@@ -13,7 +13,7 @@
   "random": false,
 
   "max_epochs": 1000,
-  "batch_size": 4,
+  "batch_size": 16,
   "tt_ratio": 0.90,
   "shuffle_seed": null,
 
@@ -29,19 +29,31 @@
 
   "mfcc_deltas": [2, 2],
 
+  "conv_switch": true,
+  "conv_filter_dims": [[6, 1], [6, 1], [6, 1]],
+  "conv_strides": [[2, 1], [1, 1], [1, 1]],
+  "conv_in_channels": [1, 256, 256],
+  "conv_out_channels": [256, 256, 256],
+  "conv_dilations": [[1, 1], [1, 1], [1, 1]],
+  "conv_padding": "SAME",
+  "conv_batch_norm": true,
+
+  "ff_switch": false,
   "ff_num_hidden": [2048, 1024, 512],
   "ff_dropout": [0.2, 0.2, 0.1],
   "ff_batch_norm": true,
   "relu_clip": 20,
-  "rnn_num_hidden": [512, 512],
+
+  "rnn_num_hidden": [1024, 1024, 512],
   "rnn_use_peephole": true,
+
   "ctc_collapse_repeated": true,
   "ctc_merge_repeated": true,
   "beam_width": 128,
   "top_paths": 1,
 
   "optimizer_choice": "amsgrad",
-  "lr": 0.01,
+  "lr": 1.0,
   "epsilon": 0.1,
   "grad_clip": "global_norm",
   "grad_clip_val": 10,
