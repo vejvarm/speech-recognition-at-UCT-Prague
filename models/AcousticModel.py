@@ -384,6 +384,17 @@ class AcousticModel(object):
                            "init_train": iterator_train_init,
                            "init_test": iterator_test_init}
 
+    @staticmethod
+    def batch_norm_layer(x, is_train, scope):
+        # !!! during training the tf.GraphKeys.UPDATE_OPS must be called to update the mean and variance
+        bn = tf.contrib.layers.batch_norm(x,
+                                          decay=0.9,
+                                          is_training=is_train,
+                                          updates_collections=tf.GraphKeys.UPDATE_OPS,
+                                          zero_debias_moving_mean=True,
+                                          scope=scope)
+        return bn
+
     def conv_layer(self, x, filt_dims, stride, in_channels=1, out_channels=1, dilation=(1, 1), padding='SAME',
                    data_format="NCHW", batch_norm=False, is_train=True, initializer=None,
                    filt_name='filter', name='conv', scope='conv'):
@@ -425,6 +436,8 @@ class AcousticModel(object):
             if batch_norm:
                 conv = self.batch_norm_layer(conv, is_train, scope)
 
+            conv = tf.minimum(tf.nn.relu(conv), self.relu_clip)
+
             return conv
 
     @staticmethod
@@ -448,20 +461,9 @@ class AcousticModel(object):
             b = tf.Variable(tf.truncated_normal([output_size], stddev=0.001), name=b_name)
         return w, b
 
-    @staticmethod
-    def batch_norm_layer(x, is_train, scope):
-        # !!! during training the tf.GraphKeys.UPDATE_OPS must be called to update the mean and variance
-        bn = tf.contrib.layers.batch_norm(x,
-                                          decay=0.9,
-                                          is_training=is_train,
-                                          updates_collections=tf.GraphKeys.UPDATE_OPS,
-                                          zero_debias_moving_mean=True,
-                                          scope=scope)
-        return bn
-
     def lstm_cell(self, num_hidden):
         # return rnn.LSTMBlockCell(num_units=num_hidden, use_peephole=self.rnn_use_peephole)
-        return rnn.GRUBlockCellV2(num_units=num_hidden)
+        return rnn.GRUBlockCell(num_units=num_hidden)
         # cell = rnn.LSTMBlockFusedCell(num_units=num_hidden)
         # return cudnn_rnn.CudnnCompatibleLSTMCell(num_hidden, use_peephole=self.rnn_use_peephole)
         # return tf.contrib.grid_rnn.Grid1LSTMCell(num_units=num_hidden, state_is_tuple=True)
