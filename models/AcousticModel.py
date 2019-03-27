@@ -385,12 +385,13 @@ class AcousticModel(object):
                            "init_test": iterator_test_init}
 
     @staticmethod
-    def batch_norm_layer(x, is_train, scope):
+    def batch_norm_layer(x, is_train, data_format, scope):
         # !!! during training the tf.GraphKeys.UPDATE_OPS must be called to update the mean and variance
         bn = tf.contrib.layers.batch_norm(x,
                                           decay=0.9,
                                           is_training=is_train,
                                           updates_collections=tf.GraphKeys.UPDATE_OPS,
+                                          data_format=data_format,
                                           zero_debias_moving_mean=True,
                                           scope=scope)
         return bn
@@ -434,7 +435,7 @@ class AcousticModel(object):
             conv = tf.nn.conv2d(x, filt, strides, padding, data_format=data_format, dilations=dilations, name=name)
 
             if batch_norm:
-                conv = self.batch_norm_layer(conv, is_train, scope)
+                conv = self.batch_norm_layer(conv, is_train, data_format, scope)
 
             conv = tf.minimum(tf.nn.relu(conv), self.relu_clip)
 
@@ -449,7 +450,7 @@ class AcousticModel(object):
                 time_size = filt_time_size
             else:
                 raise ValueError('padding argument must be SAME or VALID')
-            return tf.cast(tf.ceil(tf.divide(input_size - filt_time_size, filt_time_stride)), dtype=tf.int32)
+            return tf.cast(tf.ceil(tf.divide(input_size - time_size, filt_time_stride)), dtype=tf.int32)
 
     @staticmethod
     def ff_layer(w_name, b_name, input_size, output_size, initializer=None):
