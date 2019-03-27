@@ -17,7 +17,7 @@
   "tt_ratio": 0.90,
   "shuffle_seed": null,
 
-  "decay_by_epochs": false,
+  "decay_by_epochs": true,
   "decay_by_length": false,
   "d_by_epo_rate": 0.5,
   "d_by_epo_steps": 10,
@@ -30,7 +30,7 @@
   "mfcc_deltas": [2, 2],
 
   "conv_switch": true,
-  "conv_filter_dims": [[6, 1], [6, 1], [6, 1]],
+  "conv_filter_dims": [[11, 1], [11, 1], [11, 1]],
   "conv_strides": [[2, 1], [1, 1], [1, 1]],
   "conv_in_channels": [1, 256, 256],
   "conv_out_channels": [256, 256, 256],
@@ -53,7 +53,7 @@
   "top_paths": 1,
 
   "optimizer_choice": "amsgrad",
-  "lr": 1.0,
+  "lr": 0.5,
   "epsilon": 0.1,
   "grad_clip": "global_norm",
   "grad_clip_val": 10,
