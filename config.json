@@ -1,7 +1,7 @@
 {
   "best": false,
   "debug": false,
-  "load_dir": "C:/!temp/train_small",
+  "load_dir": "C:/!temp/train_big",
   "save_dir": "./data/results/",
   "do_train": true,
   "from_checkpoint": false,
@@ -16,7 +16,7 @@
   "feature_energy": true,
   "feature_deltas": [2, 2],
   "max_epochs": 1000,
-  "batch_size": 16,
+  "batch_size": 8,
   "tt_ratio": 0.90,
   "shuffle_seed": null,
 
@@ -35,8 +35,8 @@
   "conv_switch": true,
   "conv_filter_dims": [[11, 1], [11, 1], [11, 1]],
   "conv_strides": [[2, 1], [1, 1], [1, 1]],
-  "conv_in_channels": [1, 256, 256],
-  "conv_out_channels": [256, 256, 256],
+  "conv_in_channels": [1, 128, 128],
+  "conv_out_channels": [128, 128, 128],
   "conv_dilations": [[1, 1], [1, 1], [1, 1]],
   "conv_padding": "SAME",
   "conv_batch_norm": true,
@@ -47,7 +47,7 @@
   "ff_batch_norm": true,
   "relu_clip": 20,
 
-  "rnn_num_hidden": [1024, 1024, 512],
+  "rnn_num_hidden": [512, 512],
   "rnn_use_peephole": true,
 
   "ctc_collapse_repeated": true,
@@ -56,10 +56,10 @@
   "top_paths": 1,
 
   "optimizer_choice": "amsgrad",
-  "lr": 0.5,
+  "lr": 1.0,
   "epsilon": 0.1,
   "grad_clip": "global_norm",
-  "grad_clip_val": 10,
+  "grad_clip_val": 400,
 
   "show_device_placement": false,
   "print_batch_x": false,

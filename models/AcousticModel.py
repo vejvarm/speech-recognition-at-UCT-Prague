@@ -258,9 +258,12 @@ class AcousticModel(object):
             )
 
         # Add all the other common code for the initialization here
-        gpu_options = tf.GPUOptions(allow_growth=True)
+        gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.0,
+                                    allow_growth=True)
         logging_options = True if self.config["debug"] and self.show_device_placement else False
-        sess_config = tf.ConfigProto(gpu_options=gpu_options, log_device_placement=logging_options)
+        sess_config = tf.ConfigProto(gpu_options=gpu_options,
+                                     log_device_placement=logging_options,
+                                     allow_soft_placement=True)
         self.sess = tf.Session(config=sess_config, graph=self.graph)
         self.sw_train = tf.summary.FileWriter(self.checkpoint_save_path + '/train', self.sess.graph)
         self.sw_test = tf.summary.FileWriter(self.checkpoint_save_path + '/test')
@@ -434,10 +437,10 @@ class AcousticModel(object):
 
             conv = tf.nn.conv2d(x, filt, strides, padding, data_format=data_format, dilations=dilations, name=name)
 
+            conv = tf.minimum(tf.nn.relu(conv), self.relu_clip)
+
             if batch_norm:
                 conv = self.batch_norm_layer(conv, is_train, data_format, scope)
-
-            conv = tf.minimum(tf.nn.relu(conv), self.relu_clip)
 
             return conv
 
@@ -526,8 +529,6 @@ class AcousticModel(object):
             self.epoch_mean_cer = tf.Variable(0, trainable=False, name='epoch_mean_cer', dtype=tf.float32)
 
             # reshaping from [batch_size, batch_time, num_features] to [batch_size*batch_time, num_features]
-#            with tf.device(devices["gpu"][0]):
-
             # convolutional layers
             if self.conv_switch:
                 assert len(self.conv_filter_dims) == len(self.conv_in_channels)
@@ -566,9 +567,7 @@ class AcousticModel(object):
                 # reshape to [batch_time, batch_size, num_features*out_channels]
                 conv_layer = tf.reshape(conv_layer, (-1, ph_batch_size, self.num_features*self.conv_out_channels[-1]))
 
-
             # 4th layer: stacked BiRNN with LSTM cells
-            # TODO: LSTM might become a computational bottleneck
             with tf.variable_scope("layer_4", initializer=initializer):
                 with tf.name_scope("birnn"):
                     cells_fw = [self.lstm_cell(n) for n in self.rnn_num_hidden]  # list of forward direction cells
