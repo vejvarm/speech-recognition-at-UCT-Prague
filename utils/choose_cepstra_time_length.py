@@ -1,7 +1,7 @@
 import os
 import shutil
 
-from MFCC import MFCC
+from FeatureExtraction import FeatureExtractor
 from DataLoader import DataLoader
 
 
@@ -17,7 +17,7 @@ def choose_cepstra_frame_length(cepstra_load_dir, transcript_load_dir, cepstra_s
     :param max_frame_length: maximum time length of cepstrum in frames
     :return:
     """
-    cepstra, cepstra_paths = MFCC.load_cepstra(cepstra_load_dir)
+    cepstra, cepstra_paths = FeatureExtractor.load_cepstra(cepstra_load_dir)
     labels, label_paths = DataLoader.load_labels(transcript_load_dir)
 
     assert len(cepstra) == len(labels)
@@ -49,9 +49,9 @@ def choose_cepstra_frame_length(cepstra_load_dir, transcript_load_dir, cepstra_s
 
 
 if __name__ == '__main__':
-    min_frame_length = 30
-    max_frame_length = 1000
-    load_dir = "../data/train_deltas"
-    save_dir = "../data/train_deltas_min_{}_max_{}".format(min_frame_length, max_frame_length)
+    min_frame_length = 100
+    max_frame_length = 3000
+    load_dir = "c:/!temp/MFSC_deltas/"
+    save_dir = "../data/MFSC_deltas_min_{}_max_{}".format(min_frame_length, max_frame_length)
 
     choose_cepstra_frame_length(load_dir, load_dir, save_dir, save_dir, min_frame_length, max_frame_length)

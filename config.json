@@ -12,6 +12,9 @@
 
   "random": false,
 
+  "feature_type": "MFSC",
+  "feature_energy": true,
+  "feature_deltas": [2, 2],
   "max_epochs": 1000,
   "batch_size": 4,
   "tt_ratio": 0.90,
@@ -26,8 +29,6 @@
 
   "cepstrum_pad_val": 0.0,
   "label_pad_val": -1,
-
-  "mfcc_deltas": [2, 2],
 
   "ff_num_hidden": [2048, 1024, 512],
   "ff_dropout": [0.2, 0.2, 0.1],

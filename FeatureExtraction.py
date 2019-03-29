@@ -6,41 +6,47 @@ from scipy.fftpack import dct
 from matplotlib import pyplot as plt
 
 
-class MFCC:
+class FeatureExtractor:
 
-    def __init__(self, data, fs, **kwargs):
+    def __init__(self, data, fs, feature_type='MFSC', **kwargs):
         """
 
         :param data: list of 1d numpy arrays which represent the signal (audio)
         :param fs: sample rate of the signals in data
+        :param feature_type: (str) type of the features ('MFSC' or 'MFCC')
         :arg kwargs:
             :param alpha: weighting coefficient of pre-emphasis filter (default: 0.95)
             :param framewidth: width of the frames that divide the data in seconds (default: 0.025)
             :param framestride: stride of the frames that divide the data in seconds (default: 0.01)
+            :param energy: (bool) whether to include energy feature or not (default: True)
             :param fmin: starting frequency of the filterbanks (default: 300)
             :param fmax: ending frequency of the filterbanks (default: fs/2)
             :param nfft: length of the Fast Fourier Transformation (dafault: 512)
             :param nbanks: number of mel-scaled filterbanks applied on the STFTed frames (default: 26)
             :param cepstrums: slice of the final cepstra which are to be used as features (default: slice(1, 13))
+            :param deltas: Tuple[int] containing span of deltas and delta-deltas
         """
         self.data = data
         self.fs = fs                                                                     # Hz
-        self.alpha = kwargs['alpha'] if 'alpha' in kwargs else 0.95                      # 1
-        self.framewidth = kwargs['framewidth'] if 'framewidth' in kwargs else 0.025      # s
-        self.framestride = kwargs['framestride'] if 'framestride' in kwargs else 0.01    # s
-        self.fmin = kwargs['fmin'] if 'fmin' in kwargs else 300                          # Hz
-        self.fmax = kwargs['fmax'] if 'fmax' in kwargs else fs/2                         # Hz
-        self.nfft = kwargs['nfft'] if 'nfft' in kwargs else 512                          # 1
-        self.nbanks = kwargs['nbanks'] if 'nbanks' in kwargs else 26                     # 1
-        self.cepstrums = kwargs['cepstrums'] if 'cepstrums' in kwargs else slice(1, 13)  # 1
+        self.type = feature_type
+        self.alpha = kwargs['alpha'] if 'alpha' in kwargs else 0.95                      # float
+        self.framewidth = kwargs['framewidth'] if 'framewidth' in kwargs else 0.025      # float
+        self.framestride = kwargs['framestride'] if 'framestride' in kwargs else 0.01    # float
+        self.energy = kwargs['energy'] if 'energy' in kwargs else True                   # bool
+        self.fmin = kwargs['fmin'] if 'fmin' in kwargs else 64                           # float (Hz)
+        self.fmax = kwargs['fmax'] if 'fmax' in kwargs else fs/2                         # float (Hz)
+        self.nfft = kwargs['nfft'] if 'nfft' in kwargs else 512                          # int
+        self.nbanks = kwargs['nbanks'] if 'nbanks' in kwargs else 26                     # int
+        self.cepstrums = kwargs['cepstrums'] if 'cepstrums' in kwargs else slice(1, 13)  # Slice
+        self.deltas = kwargs['deltas'] if 'deltas' in kwargs else (0, 0)                 # Tuple[int]
 
         # initialize containers
-        self.stft = (np.asarray(0, dtype=np.float32), )               # tuple for sffted frames
-        self.power_stft = (np.asarray(0, dtype=np.float32),)          # tuple for power density of sffted frames
+        self.stft = (np.asarray(0, dtype=np.float32), )               # tuple for STFTed frames
+        self.power_stft = (np.asarray(0, dtype=np.float32),)          # tuple for power density of STFTed frames
         self.filterbanks = np.zeros((self.nbanks, self.nfft//2 + 1))  # filters to be applied to power_stft
         self.log_sum = (np.asarray(0, dtype=np.float32),)             # log10 of matmul(power_stft, filterbanks)
 
-    def transform_data(self, deltas=(0, 0)):
+    def transform_data(self):
 
         data = self.pre_emphasis(self.data, self.alpha)
         frames = self.make_frames(data, self.fs, self.framewidth, self.framestride)
@@ -49,36 +55,41 @@ class MFCC:
         power_stft = self.power_spectrum(fft)
         freq_idxs = self.mel_scaled_frequency_range()
         triangles = self.triangular_filterbanks(freq_idxs)
-        log_sum = self.log_sum_of_filtered_frames(power_stft, triangles)
-        mfcc = self.discrete_cosine_transform(log_sum)
-        mfcc_standard = self.standardize(mfcc)
+        features = self.log_sum_of_filtered_frames(power_stft, triangles)
+        if self.type == 'MFCC':
+            features = self.discrete_cosine_transform(features)
+        if self.energy:
+            energy = self.calculate_energy(frames)
+            features = [np.hstack((features[i], energy[i])) for i in range(len(features))]
+        features_standard = self.standardize(features)
 
-        if deltas[0]:
-            d_mfcc = self.delta_multiple_inputs(mfcc, deltas[0])
-            d_mfcc_standard = self.standardize(d_mfcc)
-            # d_mfcc_standard = self.pad_with_zeros(d_mfcc_standard, deltas[0])
-        if deltas[1]:
-            d2_mfcc = self.delta_multiple_inputs(self.delta_multiple_inputs(mfcc, deltas[0]), deltas[1])
-            d2_mfcc_standard = self.standardize(d2_mfcc)
-            # d2_mfcc_standard = self.pad_with_zeros(d2_mfcc_standard, sum(deltas))
+        if self.deltas[0]:
+            d_features = self.delta_multiple_inputs(features, self.deltas[0])
+            d_features_standard = self.standardize(d_features)
+        if self.deltas[1]:
+            d2_features = self.delta_multiple_inputs(self.delta_multiple_inputs(features, self.deltas[0]), self.deltas[1])
+            d2_features_standard = self.standardize(d2_features)
 
-        if not any(deltas):
-            return mfcc_standard
-        elif all(deltas):
-            return [np.hstack((mfcc_standard[i], d_mfcc_standard[i], d2_mfcc_standard[i])) for i in range(len(mfcc))]
-        elif deltas[0]:
-            return [np.hstack((mfcc_standard[i], d_mfcc_standard[i])) for i in range(len(mfcc))]
-        elif deltas[1]:
-            return [np.hstack((mfcc_standard[i], d2_mfcc_standard[i])) for i in range(len(mfcc))]
+        if not any(self.deltas):
+            return features_standard
+        elif all(self.deltas):
+            return [np.hstack((features_standard[i], d_features_standard[i], d2_features_standard[i]))
+                    for i in range(len(features))]
+        elif self.deltas[0]:
+            return [np.hstack((features_standard[i], d_features_standard[i])) for i in range(len(features))]
+        elif self.deltas[1]:
+            return [np.hstack((features_standard[i], d2_features_standard[i])) for i in range(len(features))]
 
     def show_settings(self):
         attr_dict = vars(self)
         output = "fs = {} Hz\n" \
+                 "type = {}\n" \
                  "framewidth = {} s\n" \
                  "framestride = {} s\n" \
                  "fmin = {} Hz\n" \
                  "fmax = {} Hz\n" \
                  "nfft = {} \n" \
+                 "nbanks = {}\n" \
                  "cepstrums = {} \n".format(*list(attr_dict.values())[1:])
         return output
 
@@ -100,7 +111,7 @@ class MFCC:
         :param fs: sample rate of the signal
         :param width: the width of one frame in seconds
         :param stride: the stride at which the frames are made in seconds
-        :return: list of numpy arrays with overall shape (nr,frame_length,n_frames)
+        :return: list of numpy arrays with overall shape (nr,n_frames,frame_length)
         """
         nr = len(data)
         framed_data = [np.array(0, dtype=np.float32)]*nr
@@ -122,13 +133,22 @@ class MFCC:
         return framed_data
 
     @staticmethod
+    def calculate_energy(framed_data):
+        """calculate energy of the frames, which is a sum of squares over the length of the frame"""
+        frames_energy = []
+        for row in framed_data:
+            frames_energy.append(np.sum(np.square(row), axis=1, dtype=np.float32).reshape((-1, 1)))
+
+        return frames_energy
+
+    @staticmethod
     def hamming(framed_data):
         """Apply Hamming window on individual frames in rows of framed_data"""
         nr = len(framed_data)
         hamminged_data = [np.array(0, dtype=np.float32)] * nr
 
         for i, row in enumerate(framed_data):
-            hamminged_data[i] = row*np.hamming(np.shape(row)[1])
+            hamminged_data[i] = row*np.hamming(row.shape[1])
 
         return hamminged_data
 
@@ -239,7 +259,8 @@ class MFCC:
 
     @staticmethod
     def standardize(cepstral_data):
-        return [np.subtract(inp_arr, np.mean(inp_arr, axis=0)) / np.std(inp_arr, axis=0) for inp_arr in cepstral_data]
+        return [np.subtract(inp_arr, np.mean(inp_arr, axis=0)) / np.std(inp_arr, axis=0) + 1e-8
+                for inp_arr in cepstral_data]
 
     @staticmethod
     def plot_cepstra(cepstral_data, nplots=3, framestride=0.01):
@@ -251,9 +272,9 @@ class MFCC:
             ncepstra = np.arange(np.shape(cepstral_data[i])[1], dtype=np.int8)
             plt.figure()
             plt.pcolormesh(tspan, ncepstra, cepstral_data[i].T, cmap='rainbow')
-            plt.title('Mel-frequency cepstral coefficients of sample no. {}'.format(i))
+            plt.title('Mel-frequency coefficients of sample no. {}'.format(i))
             plt.xlabel('Time (s)')
-            plt.ylabel('Cepstral coefficients')
+            plt.ylabel('coefficients (features)')
 
 
     @staticmethod
@@ -300,7 +321,8 @@ class MFCC:
 if __name__ == '__main__':
     data = [np.random.randn(np.random.randint(3000, 5000)) for _ in range(1000)]
     fs = 16000
-    m = MFCC(data, fs)
+    m = FeatureExtractor(data, fs, feature_type='MFSC', energy=True, nbanks=40, deltas=(2, 2))
 
-    cepstra_2d = m.transform_data(deltas=(2, 2))
+    cepstra_2d = m.transform_data()
     m.plot_cepstra(cepstra_2d, nplots=3)
+    plt.show()

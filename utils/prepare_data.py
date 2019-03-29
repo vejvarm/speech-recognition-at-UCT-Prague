@@ -4,7 +4,7 @@ from itertools import compress
 
 import numpy as np
 
-from MFCC import MFCC
+from FeatureExtraction import FeatureExtractor
 from DataLoader import PDTSCLoader
 
 
@@ -23,7 +23,7 @@ def extract_filenames(audio_folder, transcript_folder):
     return files
 
 
-def prepare_data(files, save_folder, deltas=(0, 0), filter_nan=True, sort=True):
+def prepare_data(files, save_folder, feature_type="MFSC", energy=True, deltas=(0, 0), filter_nan=True, sort=True):
     final_cepstra = []
     final_labels = []
 
@@ -32,8 +32,8 @@ def prepare_data(files, save_folder, deltas=(0, 0), filter_nan=True, sort=True):
         labels = pdtsc.transcripts_to_labels()  # list of lists of 1D numpy arrays
         audio, fs = pdtsc.load_audio()
 
-        mfcc = MFCC(audio[0], fs)  # TODO: make MFCC work for more audiofiles
-        cepstra = mfcc.transform_data(deltas=deltas)  # list of 2D arrays
+        mfcc = FeatureExtractor(audio[0], fs, feature_type=feature_type, energy=energy, deltas=deltas)
+        cepstra = mfcc.transform_data()  # list of 2D arrays
 
         #    mfcc.plot_cepstra(cepstra, figstart=1, nplots=1)
 
@@ -60,7 +60,7 @@ def prepare_data(files, save_folder, deltas=(0, 0), filter_nan=True, sort=True):
         final_labels = [final_labels[i] for i in sort_indices]      # sort the label list
 
     # SAVE Cepstra to files (features)
-    MFCC.save_cepstra(final_cepstra, save_folder, exist_ok=True)
+    FeatureExtractor.save_cepstra(final_cepstra, save_folder, exist_ok=True)
 
     # SAVE Transcripts to files (labels)
     pdtsc.save_labels([final_labels], save_folder, exist_ok=True)
@@ -70,10 +70,12 @@ def prepare_data(files, save_folder, deltas=(0, 0), filter_nan=True, sort=True):
 
 if __name__ == '__main__':
     # extracting audiofiles, transforming into cepstra and saving to separate folders
+    feature_type = "MFSC"
+
     audio_folder = "../data/raw/audio/"
     transcript_folder = "../data/raw/transcripts/"
-    save_folder = '../data/train_deltas/'
+    save_folder = '../data/{}_deltas/'.format(feature_type)
 
     files = extract_filenames(audio_folder, transcript_folder)
 
-    prepare_data(files, save_folder, deltas=(2, 2), filter_nan=True)
+    prepare_data(files, save_folder, feature_type="MFSC", energy=True, deltas=(2, 2), filter_nan=True)

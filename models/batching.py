@@ -1,8 +1,8 @@
 import tensorflow as tf
 import numpy as np
 
-from MFCC import MFCC
-load_cepstra = MFCC.load_cepstra
+from FeatureExtraction import FeatureExtractor
+load_cepstra = FeatureExtractor.load_cepstra
 
 if __name__ == '__main__':
     load_dir = '../data'

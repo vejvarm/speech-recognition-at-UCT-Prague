@@ -7,7 +7,7 @@ import json
 import os
 import sys
 from datetime import datetime
-from typing import List, Dict, Union
+from typing import List, Dict, Union, Tuple
 
 import numpy as np
 import tensorflow as tf
@@ -16,11 +16,11 @@ from tqdm import tqdm
 from tensorflow.contrib import rnn, cudnn_rnn
 
 from DataLoader import DataLoader
-from MFCC import MFCC
+from FeatureExtraction import FeatureExtractor
 from helpers import check_equal, load_config, get_available_devices, load_speech, list_to_padded_array
 from utils.AMSGrad import AMSGrad
 
-load_cepstra = MFCC.load_cepstra  # for loading  cepstrum-###.npy files from a folder into a list of lists
+load_cepstra = FeatureExtractor.load_cepstra  # for loading  cepstrum-###.npy files from a folder into a list of lists
 load_labels = DataLoader.load_labels  # for loading transcript-###.npy files from folder into a list of lists
 
 
@@ -68,6 +68,9 @@ class AcousticModel(object):
     optimizer_choice: str
     grad_clip: Union[str, bool]
     grad_clip_val: float
+    feature_type: str
+    feature_energy: bool
+    feature_deltas: Tuple[int]
     show_device_placement: bool
     print_batch_x: bool
     print_layer_3: bool
@@ -117,7 +120,6 @@ class AcousticModel(object):
         self.parallel_iterations = self.config['parallel_iterations']  # GPU parallelization in stacked_dynamic_BiRNN
         self.cepstrum_pad_val = self.config['cepstrum_pad_val']  # value with which to pad cepstra to same length
         self.label_pad_val = self.config['label_pad_val']  # value to pad batches of labels to same length
-        self.mfcc_deltas = self.config['mfcc_deltas']  # which deltas were set during MFCC generation for training
         self.init_op = None
 
         # Data-inferred parameters (check load_data())#
@@ -177,6 +179,11 @@ class AcousticModel(object):
             self.epsilon = self.config['epsilon']  # (float) a small constant for numerical stability
             self.grad_clip = self.config['grad_clip']  # (str|bool) method to be used (False for no clipping)
             self.grad_clip_val = self.config['grad_clip_val']  # (float) value at which to clip gradient
+
+            # inference HP
+            self.feature_type = self.config['feature_type']      # (str) type of features for inference (MFCC or MFSC)
+            self.feature_energy = self.config['feature_energy']  # (bool) whether to add energy feature
+            self.feature_deltas = self.config['feature_deltas']  # (Tuple[int]) use of delta coeffs in inference feats
 
         # DEBUGGING SETTINGS # (works only if config["debug"] == True)
         self.show_device_placement = self.config['show_device_placement']
@@ -767,9 +774,10 @@ class AcousticModel(object):
         print("\n_____LOADING AUDIO_____")
         signal, fs = load_speech(audio)
 
-        print("\n_____CONVERTING TO MFCC_____")
-        m = MFCC([signal], fs)
-        cepstrum = m.transform_data(deltas=self.mfcc_deltas)
+        print("\n_____CONVERTING TO FEATURE REPRESENTATION_____")
+        m = FeatureExtractor([signal], fs, feature_type=self.feature_type, energy=self.feature_energy,
+                             deltas=self.feature_deltas)
+        cepstrum = m.transform_data()
 
         size_x = np.array([cepstrum[0].shape[0]], dtype=np.int32)
 

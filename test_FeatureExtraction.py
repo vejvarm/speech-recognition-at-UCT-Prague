@@ -4,18 +4,18 @@ from unittest import TestCase
 
 import numpy as np
 
-from MFCC import MFCC
+from FeatureExtraction import FeatureExtractor
 
 
-class TestMFCC(TestCase):
+class TestFeatureExtraction(TestCase):
     def setUp(self):
         data = [np.random.randn(np.random.randint(3000, 5000)) for _ in range(100)]
-        self.mfcc = MFCC(data, 16000)
-        self.cepstra = self.mfcc.transform_data(deltas=(2, 2))
+        self.mfcc = FeatureExtractor(data, 16000, feature_type="MFCC", energy=True, deltas=(2, 2))
+        self.cepstra = self.mfcc.transform_data()
         self.data_temp_folder = './data/temp'
 
 
-class TestInit(TestMFCC):
+class TestInit(TestFeatureExtraction):
 
     def test_kwargs(self):
         self.assertEqual(self.mfcc.framewidth, 0.025)
@@ -26,7 +26,7 @@ class TestInit(TestMFCC):
         self.assertEqual(self.mfcc.cepstrums, slice(1, 13))
 
 
-class TestPreEmphasis(TestMFCC):
+class TestPreEmphasis(TestFeatureExtraction):
 
     def test_shape(self):
         pre_emph_data = self.mfcc.pre_emphasis(self.mfcc.data)
@@ -34,7 +34,7 @@ class TestPreEmphasis(TestMFCC):
             self.assertEqual(self.mfcc.data[i].shape, pre_emph_data[i].shape)
 
 
-class TestHamming(TestMFCC):
+class TestHamming(TestFeatureExtraction):
 
     def test_shape(self):
         data = self.mfcc.data
@@ -62,7 +62,7 @@ class TestHamming(TestMFCC):
         self.assertTrue((tested_hamming == true_hamming).all())
 
 
-class TestSaveLoad(TestMFCC):
+class TestSaveLoad(TestFeatureExtraction):
 
     def test_save_load_consistency(self):
 
