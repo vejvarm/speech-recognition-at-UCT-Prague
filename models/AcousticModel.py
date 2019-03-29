@@ -70,6 +70,7 @@ class AcousticModel(object):
     relu_clip: float
     rnn_num_hidden: List[int]
     rnn_use_peephole: bool
+    dropout_probs: List[float]
     ctc_collapse_repeated: bool
     ctc_merge_repeated: bool
     beam_width: int
@@ -79,7 +80,7 @@ class AcousticModel(object):
     grad_clip_val: float
     show_device_placement: bool
     print_batch_x: bool
-    print_layer_3: bool
+    print_conv: bool
     print_dropout: bool
     print_rnn_outputs: bool
     print_lr: bool
@@ -87,7 +88,7 @@ class AcousticModel(object):
     print_grad_norm: bool
     print_labels: bool
     print_batch_x_op: tf.print
-    print_layer_3_op: tf.print
+    print_conv_op: tf.print
     print_dropout_op: tf.print
     print_gradients_op: tf.print
     print_grad_norm_op: tf.print
@@ -189,6 +190,9 @@ class AcousticModel(object):
             self.rnn_num_hidden = self.config['rnn_num_hidden']  # (list of ints) number of hidden units in LSTM cells
             self.rnn_use_peephole = self.config['rnn_use_peephole']  # (bool) use peephole connections in the LSTM cells
 
+            # Dropout
+            self.dropout_probs = self.config['dropout_probs']  # (List[float]) [after CONVSs, after RNNs, after logits]
+
             self.ctc_collapse_repeated = self.config['ctc_collapse_repeated']  # (bool)
             self.ctc_merge_repeated = self.config['ctc_merge_repeated']  # (bool)
             self.beam_width = self.config['beam_width']  # (int) beam width for the Beam Search (BS) algorithm
@@ -204,7 +208,7 @@ class AcousticModel(object):
         # DEBUGGING SETTINGS # (works only if config["debug"] == True)
         self.show_device_placement = self.config['show_device_placement']
         self.print_batch_x = self.config['print_batch_x']
-        self.print_layer_3 = self.config['print_layer_3']
+        self.print_conv = self.config['print_conv']
         self.print_dropout = self.config['print_dropout']
         self.print_rnn_outputs = self.config['print_rnn_outputs']
         self.print_lr = self.config['print_lr']
@@ -219,7 +223,7 @@ class AcousticModel(object):
 
         # PRINT OPERATIONS #
         self.print_batch_x_op = None
-        self.print_layer_3_op = None
+        self.print_conv_op = None
         self.print_dropout_op = None
         self.print_rnn_outputs_op = None
         self.print_lr_op = None
@@ -458,7 +462,7 @@ class AcousticModel(object):
             b = tf.Variable(tf.truncated_normal([output_size], stddev=0.001), name=b_name)
         return w, b
 
-    def lstm_cell(self, num_hidden):
+    def rnn_cell(self, num_hidden):
         # return rnn.LSTMBlockCell(num_units=num_hidden, use_peephole=self.rnn_use_peephole)
         return rnn.GRUBlockCell(num_units=num_hidden)
         # cell = rnn.LSTMBlockFusedCell(num_units=num_hidden)
@@ -508,7 +512,7 @@ class AcousticModel(object):
             ph_y = tf.placeholder_with_default(self.inputs["y"], (None, None), name="ph_y")
             ph_batch_size = tf.placeholder(tf.int32, name="ph_batch_size")
             ph_is_train = tf.placeholder(tf.bool, name="ph_is_train")
-            ph_ff_dropout = tf.placeholder(tf.float32, [len(self.ff_dropout)], name="ph_ff_dropout")
+            ph_dropout = tf.placeholder(tf.float32, [len(self.dropout_probs)], name="ph_dropout")
 
             # Step tracking tensors and update ops
             self.global_step = tf.Variable(0, trainable=False, name='global_step', dtype=tf.int32)
@@ -555,6 +559,9 @@ class AcousticModel(object):
                                                            padding=self.conv_padding,
                                                            scope='conv_size')
 
+                # dropout after the last conv layer (after all batch normalization layers <- to avoid variance shift)
+                conv_layer = tf.nn.dropout(conv_layer, keep_prob=(1.0 - self.dropout_probs[0]))
+
                 # transpose dimensions to [batch_time, batch_size, num_features, out_channels]
                 conv_layer = tf.transpose(conv_layer, [2, 0, 3, 1])
                 # reshape to [batch_time, batch_size, num_features*out_channels]
@@ -563,8 +570,8 @@ class AcousticModel(object):
             # 4th layer: stacked BiRNN with LSTM cells
             with tf.variable_scope("layer_4", initializer=initializer):
                 with tf.name_scope("birnn"):
-                    cells_fw = [self.lstm_cell(n) for n in self.rnn_num_hidden]  # list of forward direction cells
-                    cells_bw = [self.lstm_cell(n) for n in self.rnn_num_hidden]  # list of backward direction cells
+                    cells_fw = [self.rnn_cell(n) for n in self.rnn_num_hidden]  # list of forward direction cells
+                    cells_bw = [self.rnn_cell(n) for n in self.rnn_num_hidden]  # list of backward direction cells
 #                    initial_states_fw = [tf.truncated_normal([ph_batch_size, n], stddev=0.0001)
 #                                         for n in self.rnn_num_hidden]
 #                    initial_states_bw = [tf.truncated_normal([ph_batch_size, n], stddev=0.0001)
@@ -586,11 +593,13 @@ class AcousticModel(object):
                                                                             time_major=True)
                     # rnn_outputs: Tensor of shape [batch_time, batch_size, 2*num_hidden]
 
-                    # apply clipped ELU activation to the rnn outputs
+                    # __ACTIVATION__ clipped *ELU activation to the rnn outputs
                     rnn_outputs = tf.minimum(tf.nn.relu(rnn_outputs), self.relu_clip)
 
-                    # Reshape output from a tensor of shape [batch_time, batch_size, 2*num_hidden]
-                    # to a tensor of shape [batch_time*batch_size, 2*num_hidden]
+                    # __DROPOUT__ after the RNN layer's nonlinearity (*ELU) function
+                    rnn_outputs = tf.nn.dropout(rnn_outputs, keep_prob=(1.0 - self.dropout_probs[1]))
+
+                    # __RESHAPE__ [batch_time, batch_size, 2*num_hidden] -> [batch_time*batch_size, 2*num_hidden]
                     rnn_outputs = tf.reshape(rnn_outputs, [-1, 2*self.rnn_num_hidden[-1]])
 
             # 5th layer: linear projection of outputs from BiRNN
@@ -601,10 +610,13 @@ class AcousticModel(object):
 
                 # convert rnn_outputs into logits (apply linear projection of rnn outputs)
                 # lp_outputs.shape == [batch_time*batch_size, alphabet_size + 1]
-                lp_outputs = tf.minimum(tf.nn.relu(tf.add(tf.matmul(rnn_outputs, w5), b5)), self.relu_clip)
+                lp_outputs = tf.add(tf.matmul(rnn_outputs, w5), b5)
 
-                # reshape lp_outputs to shape [batch_time, batch_size, alphabet_size + 1]
+                # __RESHAPE__ lp_outputs to shape [batch_time, batch_size, alphabet_size + 1]
                 logits = tf.reshape(lp_outputs, [-1, ph_batch_size, logit_size])
+
+                # __DROPOUT__ before softmax layer
+                logits = tf.nn.dropout(logits, keep_prob=(1.0 - self.dropout_probs[2]))
 
             # convert labels to sparse tensor
             with tf.name_scope("labels"):
@@ -699,12 +711,12 @@ class AcousticModel(object):
                 if self.print_batch_x:
                     self.print_batch_x_op = tf.print("batch_x: ", batch_x, "shape: ", batch_x.shape,
                                                      output_stream=sys.stdout)
-                if self.print_layer_3:
-                    self.print_layer_3_op = tf.print("layer_3: ", layer_3, "shape: ", layer_3.shape,
+                if self.print_conv:
+                    self.print_conv_op = tf.print("conv_layer: ", conv_layer, "shape: ", conv_layer.shape,
                                                      output_stream=sys.stdout)
                 if self.print_dropout:
-                    self.print_dropout_op = tf.print("dropout: ", ph_ff_dropout,
-                                                     "shape: ", ph_ff_dropout.shape,
+                    self.print_dropout_op = tf.print("dropout: ", ph_dropout,
+                                                     "shape: ", ph_dropout.shape,
                                                      output_stream=sys.stdout)
                 if self.print_rnn_outputs:
                     self.print_rnn_outputs_op = tf.print("rnn_outputs: ", rnn_outputs,
@@ -745,8 +757,8 @@ class AcousticModel(object):
         if self.config["debug"]:
             if self.print_batch_x:
                 train_tensors.append(self.print_batch_x_op)
-            if self.print_layer_3:
-                train_tensors.append(self.print_layer_3_op)
+            if self.print_conv:
+                train_tensors.append(self.print_conv_op)
             if self.print_dropout:
                 train_tensors.append(self.print_dropout_op)
             if self.print_rnn_outputs:
@@ -766,7 +778,7 @@ class AcousticModel(object):
                     mean_loss, *_ = self.sess.run(train_tensors,
                                                   feed_dict={"ph_batch_size:0": self.batch_size,
                                                              "ph_is_train:0": True,
-                                                             "ph_ff_dropout:0": self.ff_dropout})
+                                                             "ph_dropout:0": self.dropout_probs})
                     timer.update(1)
                     if batch_no % 10 == 0:
                         print("BATCH {} | Loss {}".format(batch_no, mean_loss))
@@ -799,7 +811,7 @@ class AcousticModel(object):
                     mean_loss, output, mean_cer, *_ = self.sess.run(test_tensors,
                                                                     feed_dict={"ph_batch_size:0": self.batch_size,
                                                                                "ph_is_train:0": False,
-                                                                               "ph_ff_dropout:0": [0.0, 0.0, 0.0]})
+                                                                               "ph_dropout:0": [0.0, 0.0, 0.0]})
                     timer.update(1)
                     if batch_no % 5 == 0:
                         print("BATCH {} | Loss {} | Error {}".format(batch_no, mean_loss, mean_cer))
@@ -853,7 +865,7 @@ class AcousticModel(object):
                                           "ph_size_x:0": size_x,
                                           "ph_batch_size:0": 1,
                                           "ph_is_train:0": False,
-                                          "ph_ff_dropout:0": [0.0, 0.0, 0.0]})
+                                          "ph_dropout:0": [0.0, 0.0, 0.0]})
 
         print("\n_____TRANSCRIPT_____:\n{}".format("".join([DataLoader.n2c_map[c] for c in output[0][0, :] if c != -1])))
 
