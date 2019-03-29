@@ -1,7 +1,7 @@
 {
   "best": false,
   "debug": false,
-  "load_dir": "C:/!temp/train_big",
+  "load_dir": "C:/!temp/train_small",
   "save_dir": "./data/results/",
   "do_train": true,
   "from_checkpoint": false,
@@ -29,8 +29,6 @@
 
   "cepstrum_pad_val": 0.0,
   "label_pad_val": -1,
-
-  "mfcc_deltas": [2, 2],
 
   "conv_switch": true,
   "conv_filter_dims": [[11, 1], [11, 1], [11, 1]],

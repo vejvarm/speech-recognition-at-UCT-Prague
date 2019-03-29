@@ -634,7 +634,8 @@ class AcousticModel(object):
                 ctc_loss = tf.nn.ctc_loss(labels=labels, inputs=logits,
                                           sequence_length=conv_output_size,
                                           preprocess_collapse_repeated=self.ctc_collapse_repeated,
-                                          ctc_merge_repeated=self.ctc_merge_repeated)
+                                          ctc_merge_repeated=self.ctc_merge_repeated,
+                                          ignore_longer_outputs_than_inputs=True)
 
                 # TODO: ctc_loss_v2 in r1.13
 
