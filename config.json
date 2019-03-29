@@ -50,6 +50,8 @@
   "rnn_num_hidden": [512, 512],
   "rnn_use_peephole": true,
 
+  "dropout_probs": [0.2, 0.2, 0.2],
+
   "ctc_collapse_repeated": true,
   "ctc_merge_repeated": true,
   "beam_width": 128,
@@ -63,7 +65,7 @@
 
   "show_device_placement": false,
   "print_batch_x": false,
-  "print_layer_3": false,
+  "print_conv": false,
   "print_dropout": false,
   "print_rnn_outputs": false,
   "print_lr": false,
