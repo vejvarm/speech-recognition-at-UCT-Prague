@@ -571,8 +571,9 @@ class AcousticModel(object):
 
                 # transpose dimensions to [batch_time, batch_size, num_features, out_channels]
                 conv_layer = tf.transpose(conv_layer, [2, 0, 3, 1])
+                print(conv_layer.shape, self.num_features)
                 # reshape to [batch_time, batch_size, num_features*out_channels]
-                conv_layer = tf.reshape(conv_layer, (-1, ph_batch_size, self.num_features*self.conv_out_channels[-1]))
+                conv_layer = tf.reshape(conv_layer, (-1, ph_batch_size, conv_layer.shape[2]*self.conv_out_channels[-1]))
 
             # 4th layer: stacked BiRNN with LSTM cells
             with tf.variable_scope("layer_4", initializer=initializer):
