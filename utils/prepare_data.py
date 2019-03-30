@@ -23,7 +23,7 @@ def extract_filenames(audio_folder, transcript_folder):
     return files
 
 
-def prepare_data(files, save_folder, feature_type="MFSC", energy=True, deltas=(0, 0), filter_nan=True, sort=True):
+def prepare_data(files, save_folder, feature_type="MFSC", energy=True, deltas=(0, 0), nbanks=40, filter_nan=True, sort=True):
     final_cepstra = []
     final_labels = []
 
@@ -32,7 +32,7 @@ def prepare_data(files, save_folder, feature_type="MFSC", energy=True, deltas=(0
         labels = pdtsc.transcripts_to_labels()  # list of lists of 1D numpy arrays
         audio, fs = pdtsc.load_audio()
 
-        mfcc = FeatureExtractor(audio[0], fs, feature_type=feature_type, energy=energy, deltas=deltas)
+        mfcc = FeatureExtractor(audio[0], fs, feature_type=feature_type, energy=energy, deltas=deltas, nbanks=nbanks)
         cepstra = mfcc.transform_data()  # list of 2D arrays
 
         #    mfcc.plot_cepstra(cepstra, figstart=1, nplots=1)
@@ -78,4 +78,4 @@ if __name__ == '__main__':
 
     files = extract_filenames(audio_folder, transcript_folder)
 
-    prepare_data(files, save_folder, feature_type="MFSC", energy=True, deltas=(2, 2), filter_nan=True)
+    prepare_data(files, save_folder, feature_type="MFSC", energy=True, deltas=(2, 2), nbanks=40, filter_nan=True)

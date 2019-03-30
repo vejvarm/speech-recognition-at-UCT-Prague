@@ -36,7 +36,7 @@ class FeatureExtractor:
         self.fmin = kwargs['fmin'] if 'fmin' in kwargs else 64                           # float (Hz)
         self.fmax = kwargs['fmax'] if 'fmax' in kwargs else fs/2                         # float (Hz)
         self.nfft = kwargs['nfft'] if 'nfft' in kwargs else 512                          # int
-        self.nbanks = kwargs['nbanks'] if 'nbanks' in kwargs else 26                     # int
+        self.nbanks = kwargs['nbanks'] if 'nbanks' in kwargs else 40                     # int
         self.cepstrums = kwargs['cepstrums'] if 'cepstrums' in kwargs else slice(1, 13)  # Slice
         self.deltas = kwargs['deltas'] if 'deltas' in kwargs else (0, 0)                 # Tuple[int]
 
