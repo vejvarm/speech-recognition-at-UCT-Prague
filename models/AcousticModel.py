@@ -567,11 +567,10 @@ class AcousticModel(object):
                                                            scope='conv_size')
 
                 # dropout after the last conv layer (after all batch normalization layers <- to avoid variance shift)
-                conv_layer = tf.nn.dropout(conv_layer, keep_prob=(1.0 - self.dropout_probs[0]))
+                conv_layer = tf.nn.dropout(conv_layer, keep_prob=(1.0 - ph_dropout[0]))
 
                 # transpose dimensions to [batch_time, batch_size, num_features, out_channels]
                 conv_layer = tf.transpose(conv_layer, [2, 0, 3, 1])
-                print(conv_layer.shape, self.num_features)
                 # reshape to [batch_time, batch_size, num_features*out_channels]
                 conv_layer = tf.reshape(conv_layer, (-1, ph_batch_size, conv_layer.shape[2]*self.conv_out_channels[-1]))
 
@@ -605,7 +604,7 @@ class AcousticModel(object):
                     rnn_outputs = tf.minimum(tf.nn.relu(rnn_outputs), self.relu_clip)
 
                     # __DROPOUT__ after the RNN layer's nonlinearity (*ELU) function
-                    rnn_outputs = tf.nn.dropout(rnn_outputs, keep_prob=(1.0 - self.dropout_probs[1]))
+                    rnn_outputs = tf.nn.dropout(rnn_outputs, keep_prob=(1.0 - ph_dropout[1]))
 
                     # __RESHAPE__ [batch_time, batch_size, 2*num_hidden] -> [batch_time*batch_size, 2*num_hidden]
                     rnn_outputs = tf.reshape(rnn_outputs, [-1, 2*self.rnn_num_hidden[-1]])
@@ -624,7 +623,7 @@ class AcousticModel(object):
                 logits = tf.reshape(lp_outputs, [-1, ph_batch_size, logit_size])
 
                 # __DROPOUT__ before softmax layer
-                logits = tf.nn.dropout(logits, keep_prob=(1.0 - self.dropout_probs[2]))
+                logits = tf.nn.dropout(logits, keep_prob=(1.0 - ph_dropout[2]))
 
             # convert labels to sparse tensor
             with tf.name_scope("labels"):
