@@ -349,8 +349,8 @@ class AcousticModel(object):
 
         """
 
-        num_train_batches = int(self.num_data * self.tt_ratio // self.batch_size)
-        num_test_batches = int(self.num_data * (1 - self.tt_ratio) // self.batch_size)
+        num_train_batches = np.ceil(self.num_data * self.tt_ratio / self.batch_size).astype(np.int32)
+        num_test_batches = np.ceil(self.num_data * (1 - self.tt_ratio) / self.batch_size).astype(np.int32)
 
         with self.graph.as_default():
             with tf.name_scope('input_pipeline'):
@@ -365,9 +365,9 @@ class AcousticModel(object):
                                   0)  # size(label) -- unused
 
                 ds_train = self.ds_train.padded_batch(self.batch_size, padded_shapes, padding_values,
-                                                      drop_remainder=True)
+                                                      drop_remainder=False)
                 ds_test = self.ds_test.padded_batch(self.batch_size, padded_shapes, padding_values,
-                                                    drop_remainder=True)
+                                                    drop_remainder=False)
 
                 # shuffle the batches (bucketing)
                 ds_train = ds_train.shuffle(buffer_size=num_train_batches,
@@ -520,9 +520,11 @@ class AcousticModel(object):
             ph_x = tf.placeholder_with_default(self.inputs["x"], (None, None, self.num_features), name="ph_x")
             ph_size_x = tf.placeholder_with_default(self.inputs["size_x"], (None), name="ph_size_x")
             ph_y = tf.placeholder_with_default(self.inputs["y"], (None, None), name="ph_y")
-            ph_batch_size = tf.placeholder(tf.int32, name="ph_batch_size")
             ph_is_train = tf.placeholder(tf.bool, name="ph_is_train")
             ph_dropout = tf.placeholder(tf.float32, [len(self.dropout_probs)], name="ph_dropout")
+
+            batch_size = tf.shape(self.inputs["x"])[0]
+            print(batch_size)
 
             # Step tracking tensors and update ops
             self.global_step = tf.Variable(0, trainable=False, name='global_step', dtype=tf.int32)
@@ -552,7 +554,7 @@ class AcousticModel(object):
                                                 [x[0] for x in self.conv_strides]))
 
                     # reshape ph_x to [batch_size, 1, batch_time, num_features]
-                    batch_x = tf.reshape(ph_x, (ph_batch_size, 1, -1, self.num_features))
+                    batch_x = tf.reshape(ph_x, (batch_size, 1, -1, self.num_features))
 
                     conv_layer = tf.contrib.layers.stack(batch_x,
                                                          self.conv_layer,
@@ -576,7 +578,7 @@ class AcousticModel(object):
                     # transpose dimensions to [batch_time, batch_size, num_features, out_channels]
                     conv_layer = tf.transpose(conv_layer, [2, 0, 3, 1])
                     # reshape to [batch_time, batch_size, num_features*out_channels]
-                    conv_layer = tf.reshape(conv_layer, (-1, ph_batch_size, conv_layer.shape[2]*self.conv_out_channels[-1]))
+                    conv_layer = tf.reshape(conv_layer, (-1, batch_size, conv_layer.shape[2]*self.conv_out_channels[-1]))
                 else:
                     # transpose to [batch_time, batch_size, num_features]
                     conv_layer = tf.transpose(ph_x, [1, 0, 2])
@@ -587,15 +589,15 @@ class AcousticModel(object):
                 with tf.name_scope("birnn"):
                     cells_fw = [self.rnn_cell(n) for n in self.rnn_num_hidden]  # list of forward direction cells
                     cells_bw = [self.rnn_cell(n) for n in self.rnn_num_hidden]  # list of backward direction cells
-#                    initial_states_fw = [tf.truncated_normal([ph_batch_size, n], stddev=0.0001)
+#                    initial_states_fw = [tf.truncated_normal([batch_size, n], stddev=0.0001)
 #                                         for n in self.rnn_num_hidden]
-#                    initial_states_bw = [tf.truncated_normal([ph_batch_size, n], stddev=0.0001)
+#                    initial_states_bw = [tf.truncated_normal([batch_size, n], stddev=0.0001)
 #                                         for n in self.rnn_num_hidden]
-#                    initial_states_fw = [rnn.LSTMStateTuple(tf.truncated_normal([ph_batch_size, n], stddev=0.0001),
-#                                         tf.truncated_normal([ph_batch_size, n], stddev=0.0001))
+#                    initial_states_fw = [rnn.LSTMStateTuple(tf.truncated_normal([batch_size, n], stddev=0.0001),
+#                                         tf.truncated_normal([batch_size, n], stddev=0.0001))
 #                                         for n in self.rnn_num_hidden]
-#                    initial_states_bw = [rnn.LSTMStateTuple(tf.truncated_normal([ph_batch_size, n], stddev=0.0001),
-#                                         tf.truncated_normal([ph_batch_size, n], stddev=0.0001))
+#                    initial_states_bw = [rnn.LSTMStateTuple(tf.truncated_normal([batch_size, n], stddev=0.0001),
+#                                         tf.truncated_normal([batch_size, n], stddev=0.0001))
 #                                         for n in self.rnn_num_hidden]
                     rnn_outputs, _, _ = rnn.stack_bidirectional_dynamic_rnn(cells_fw,
                                                                             cells_bw,
@@ -628,7 +630,7 @@ class AcousticModel(object):
                 lp_outputs = tf.add(tf.matmul(rnn_outputs, w5), b5)
 
                 # __RESHAPE__ lp_outputs to shape [batch_time, batch_size, alphabet_size + 1]
-                logits = tf.reshape(lp_outputs, [-1, ph_batch_size, logit_size])
+                logits = tf.reshape(lp_outputs, [-1, batch_size, logit_size])
 
                 # __DROPOUT__ before softmax layer
                 logits = tf.nn.dropout(logits, keep_prob=(1.0 - ph_dropout[2]))
@@ -758,8 +760,8 @@ class AcousticModel(object):
     def learn_from_epoch(self):
         output = None
 
-        num_train_batches = int(self.num_data * self.tt_ratio // self.batch_size)
-        num_test_batches = int(self.num_data * (1 - self.tt_ratio) // self.batch_size)
+        num_train_batches = np.ceil(self.num_data * self.tt_ratio / self.batch_size).astype(np.int32)
+        num_test_batches = np.ceil(self.num_data * (1 - self.tt_ratio) / self.batch_size).astype(np.int32)
 
         epoch = self.sess.run(self.global_step)
 
@@ -792,8 +794,7 @@ class AcousticModel(object):
                 while True:
                     _, batch_no = self.sess.run([self.increment_batch_no_op, self.batch_no])
                     mean_loss, *_ = self.sess.run(train_tensors,
-                                                  feed_dict={"ph_batch_size:0": self.batch_size,
-                                                             "ph_is_train:0": True,
+                                                  feed_dict={"ph_is_train:0": True,
                                                              "ph_dropout:0": self.dropout_probs})
                     timer.update(1)
                     if batch_no % 10 == 0:
@@ -833,8 +834,7 @@ class AcousticModel(object):
                 while True:
                     _, batch_no = self.sess.run([self.increment_batch_no_op, self.batch_no])
                     mean_loss, output, mean_cer, *_ = self.sess.run(test_tensors,
-                                                                    feed_dict={"ph_batch_size:0": self.batch_size,
-                                                                               "ph_is_train:0": False,
+                                                                    feed_dict={"ph_is_train:0": False,
                                                                                "ph_dropout:0": [0.0, 0.0, 0.0]})
                     timer.update(1)
                     if batch_no % 5 == 0:
@@ -888,7 +888,6 @@ class AcousticModel(object):
                                feed_dict={"ph_x:0": x,
                                           "ph_y:0": np.zeros((1, 1), dtype=np.int32),
                                           "ph_size_x:0": size_x,
-                                          "ph_batch_size:0": 1,
                                           "ph_is_train:0": False,
                                           "ph_dropout:0": [0.0, 0.0, 0.0]})
 
