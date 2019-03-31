@@ -319,24 +319,25 @@ class AcousticModel(object):
         y_test = labels[slice_test]
 
         with self.graph.as_default():
-            # create tf Dataset objects from the training and testing data
-            data_types = (tf.float32, tf.int32)
-            data_shapes = (tf.TensorShape([None, self.num_features]), tf.TensorShape([None]))
+            with tf.name_scope('input_pipeline'):
+                # create tf Dataset objects from the training and testing data
+                data_types = (tf.float32, tf.int32)
+                data_shapes = (tf.TensorShape([None, self.num_features]), tf.TensorShape([None]))
 
-            ds_train = tf.data.Dataset.from_generator(lambda: zip(x_train, y_train),
-                                                      data_types,
-                                                      data_shapes
-                                                      )
-            ds_test = tf.data.Dataset.from_generator(lambda: zip(x_test, y_test),
-                                                     data_types,
-                                                     data_shapes
-                                                     )
+                ds_train = tf.data.Dataset.from_generator(lambda: zip(x_train, y_train),
+                                                          data_types,
+                                                          data_shapes
+                                                          )
+                ds_test = tf.data.Dataset.from_generator(lambda: zip(x_test, y_test),
+                                                         data_types,
+                                                         data_shapes
+                                                         )
 
-            # create two more components which contain the sizes of the cepstra and labels
-            self.ds_train = ds_train.map(lambda x, y: (x, y, tf.shape(x)[0], tf.size(y)),
-                                         num_parallel_calls=self.num_cpu_cores)
-            self.ds_test = ds_test.map(lambda x, y: (x, y, tf.shape(x)[0], tf.size(y)),
-                                       num_parallel_calls=self.num_cpu_cores)
+                # create two more components which contain the sizes of the cepstra and labels
+                self.ds_train = ds_train.map(lambda x, y: (x, y, tf.shape(x)[0], tf.size(y)),
+                                             num_parallel_calls=self.num_cpu_cores)
+                self.ds_test = ds_test.map(lambda x, y: (x, y, tf.shape(x)[0], tf.size(y)),
+                                           num_parallel_calls=self.num_cpu_cores)
 
     def prepare_data(self):
         """Prepare datasets for iteration through the model
@@ -352,44 +353,45 @@ class AcousticModel(object):
         num_test_batches = int(self.num_data * (1 - self.tt_ratio) // self.batch_size)
 
         with self.graph.as_default():
-            # combine the elements in datasets into batches of padded components
-            padded_shapes = (tf.TensorShape([None, self.num_features]),  # cepstra padded to maximum time in batch
-                             tf.TensorShape([None]),  # labels padded to maximum length in batch
-                             tf.TensorShape([]),  # sizes not padded
-                             tf.TensorShape([]))  # sizes not padded
-            padding_values = (tf.constant(self.cepstrum_pad_val, dtype=tf.float32),  # cepstra padded with 0.0
-                              tf.constant(self.label_pad_val, dtype=tf.int32),  # labels padded with -1
-                              0,  # size(cepstrum) -- unused
-                              0)  # size(label) -- unused
+            with tf.name_scope('input_pipeline'):
+                # combine the elements in datasets into batches of padded components
+                padded_shapes = (tf.TensorShape([None, self.num_features]),  # cepstra padded to maximum time in batch
+                                 tf.TensorShape([None]),  # labels padded to maximum length in batch
+                                 tf.TensorShape([]),  # sizes not padded
+                                 tf.TensorShape([]))  # sizes not padded
+                padding_values = (tf.constant(self.cepstrum_pad_val, dtype=tf.float32),  # cepstra padded with 0.0
+                                  tf.constant(self.label_pad_val, dtype=tf.int32),  # labels padded with -1
+                                  0,  # size(cepstrum) -- unused
+                                  0)  # size(label) -- unused
 
-            ds_train = self.ds_train.padded_batch(self.batch_size, padded_shapes, padding_values,
-                                                  drop_remainder=True)
-            ds_test = self.ds_test.padded_batch(self.batch_size, padded_shapes, padding_values,
-                                                drop_remainder=True)
+                ds_train = self.ds_train.padded_batch(self.batch_size, padded_shapes, padding_values,
+                                                      drop_remainder=True)
+                ds_test = self.ds_test.padded_batch(self.batch_size, padded_shapes, padding_values,
+                                                    drop_remainder=True)
 
-            # shuffle the batches (simillar length stays in one batch but the order of batches is shuffled every epoch
-            ds_train = ds_train.shuffle(buffer_size=num_train_batches,
-                                        seed=self.shuffle_seed,
-                                        reshuffle_each_iteration=True).prefetch(1)
-            ds_test = ds_test.shuffle(buffer_size=num_test_batches,
-                                      seed=self.shuffle_seed,
-                                      reshuffle_each_iteration=True).prefetch(1)
+                # shuffle the batches (bucketing)
+                ds_train = ds_train.shuffle(buffer_size=num_train_batches,
+                                            seed=self.shuffle_seed,
+                                            reshuffle_each_iteration=True).prefetch(1)
+                ds_test = ds_test.shuffle(buffer_size=num_test_batches,
+                                          seed=self.shuffle_seed,
+                                          reshuffle_each_iteration=True).prefetch(1)
 
-            # make initialisable iterator over the dataset which will return the batches of (x, y, size_x, size_y)
-            iterator = tf.data.Iterator.from_structure(ds_train.output_types, ds_train.output_shapes)
-            x, y, size_x, size_y = iterator.get_next()
+                # make initialisable iterator over the dataset which will return the batches of (x, y, size_x, size_y)
+                iterator = tf.data.Iterator.from_structure(ds_train.output_types, ds_train.output_shapes)
+                x, y, size_x, size_y = iterator.get_next()
 
-            # make initializers over the training and testing datasets
-            iterator_train_init = iterator.make_initializer(ds_train)
-            iterator_test_init = iterator.make_initializer(ds_test)
+                # make initializers over the training and testing datasets
+                iterator_train_init = iterator.make_initializer(ds_train)
+                iterator_test_init = iterator.make_initializer(ds_test)
 
-            # Build instance dictionary with the iterator data and operations
-            self.inputs = {"x": x,
-                           "y": y,
-                           "size_x": size_x,
-                           "size_y": size_y,
-                           "init_train": iterator_train_init,
-                           "init_test": iterator_test_init}
+                # Build instance dictionary with the iterator data and operations
+                self.inputs = {"x": x,
+                               "y": y,
+                               "size_x": size_x,
+                               "size_y": size_y,
+                               "init_train": iterator_train_init,
+                               "init_test": iterator_test_init}
 
     @staticmethod
     def batch_norm_layer(x, is_train, data_format, scope):
@@ -478,8 +480,9 @@ class AcousticModel(object):
         # return rnn.GridLSTMCell(num_units=num_hidden, state_is_tuple=True, num_frequency_blocks=None)
         # return tf.nn.rnn_cell.LSTMCell(num_units=num_hidden, state_is_tuple=True, activation='tanh')
 
-    def decaying_learning_rate(self):
+    def decaying_learning_rate(self, size_x):
         """ reduce learning rate based on number of epochs and/or length of the sequence
+        :param size_x: time dimension length of the inputs in batch
 
         :return: decayed learning rate
         """
@@ -488,7 +491,7 @@ class AcousticModel(object):
             if self.decay_by_epochs:
                 lr = tf.train.exponential_decay(lr, self.global_step, self.d_by_epo_steps, self.d_by_epo_rate)
             if self.decay_by_length:
-                mean_seq_len = tf.reduce_mean(self.inputs["size_x"])
+                mean_seq_len = tf.reduce_mean(size_x)
                 lr = tf.train.exponential_decay(lr, mean_seq_len, self.d_by_len_steps, self.d_by_len_rate)
             return lr
 
@@ -534,45 +537,50 @@ class AcousticModel(object):
 
             # reshaping from [batch_size, batch_time, num_features] to [batch_size*batch_time, num_features]
             # convolutional layers
-            if self.conv_switch:
-                assert len(self.conv_filter_dims) == len(self.conv_in_channels)
-                assert len(self.conv_in_channels) == len(self.conv_out_channels)
-                assert len(self.conv_out_channels) == len(self.conv_strides)
-                assert len(self.conv_strides) == len(self.conv_dilations)
+            with tf.variable_scope("conv_layers", initializer=initializer):
+                if self.conv_switch:
+                    assert len(self.conv_filter_dims) == len(self.conv_in_channels)
+                    assert len(self.conv_in_channels) == len(self.conv_out_channels)
+                    assert len(self.conv_out_channels) == len(self.conv_strides)
+                    assert len(self.conv_strides) == len(self.conv_dilations)
 
-                # prepare params for stacked layers
-                conv_params = list(zip(self.conv_filter_dims, self.conv_strides,
-                                       self.conv_in_channels, self.conv_out_channels,
-                                       self.conv_dilations))
-                conv_size_params = list(zip([x[0] for x in self.conv_filter_dims],
-                                            [x[0] for x in self.conv_strides]))
+                    # prepare params for stacked layers
+                    conv_params = list(zip(self.conv_filter_dims, self.conv_strides,
+                                           self.conv_in_channels, self.conv_out_channels,
+                                           self.conv_dilations))
+                    conv_size_params = list(zip([x[0] for x in self.conv_filter_dims],
+                                                [x[0] for x in self.conv_strides]))
 
-                # reshape ph_x to [batch_size, 1, batch_time, num_features]
-                batch_x = tf.reshape(ph_x, (ph_batch_size, 1, -1, self.num_features))
+                    # reshape ph_x to [batch_size, 1, batch_time, num_features]
+                    batch_x = tf.reshape(ph_x, (ph_batch_size, 1, -1, self.num_features))
 
-                conv_layer = tf.contrib.layers.stack(batch_x,
-                                                     self.conv_layer,
-                                                     conv_params,
-                                                     padding=self.conv_padding,
-                                                     batch_norm=self.conv_batch_norm,
-                                                     is_train=ph_is_train,
-                                                     initializer=initializer,
-                                                     scope='conv')
+                    conv_layer = tf.contrib.layers.stack(batch_x,
+                                                         self.conv_layer,
+                                                         conv_params,
+                                                         padding=self.conv_padding,
+                                                         batch_norm=self.conv_batch_norm,
+                                                         is_train=ph_is_train,
+                                                         initializer=initializer,
+                                                         scope='conv')
 
-                # get the time dimension size after convolutions
-                conv_output_size = tf.contrib.layers.stack(ph_size_x,
-                                                           self.conv_layer_output_size,
-                                                           conv_size_params,
-                                                           padding=self.conv_padding,
-                                                           scope='conv_size')
+                    # get the time dimension size after convolutions
+                    conv_output_size = tf.contrib.layers.stack(ph_size_x,
+                                                               self.conv_layer_output_size,
+                                                               conv_size_params,
+                                                               padding=self.conv_padding,
+                                                               scope='conv_size')
 
-                # dropout after the last conv layer (after all batch normalization layers <- to avoid variance shift)
-                conv_layer = tf.nn.dropout(conv_layer, keep_prob=(1.0 - ph_dropout[0]))
+                    # dropout after the last conv layer (after all batch normalization layers <- to avoid variance shift)
+                    conv_layer = tf.nn.dropout(conv_layer, keep_prob=(1.0 - ph_dropout[0]))
 
-                # transpose dimensions to [batch_time, batch_size, num_features, out_channels]
-                conv_layer = tf.transpose(conv_layer, [2, 0, 3, 1])
-                # reshape to [batch_time, batch_size, num_features*out_channels]
-                conv_layer = tf.reshape(conv_layer, (-1, ph_batch_size, conv_layer.shape[2]*self.conv_out_channels[-1]))
+                    # transpose dimensions to [batch_time, batch_size, num_features, out_channels]
+                    conv_layer = tf.transpose(conv_layer, [2, 0, 3, 1])
+                    # reshape to [batch_time, batch_size, num_features*out_channels]
+                    conv_layer = tf.reshape(conv_layer, (-1, ph_batch_size, conv_layer.shape[2]*self.conv_out_channels[-1]))
+                else:
+                    # transpose to [batch_time, batch_size, num_features]
+                    conv_layer = tf.transpose(ph_x, [1, 0, 2])
+                    conv_output_size = ph_size_x
 
             # 4th layer: stacked BiRNN with LSTM cells
             with tf.variable_scope("layer_4", initializer=initializer):
@@ -640,7 +648,7 @@ class AcousticModel(object):
                 # TODO: ctc_loss_v2 in r1.13
 
                 # Calculate the size normalized average loss across the batch
-                mean_loss = tf.reduce_mean(tf.divide(ctc_loss, tf.cast(ph_size_x, tf.float32)))
+                mean_loss = tf.reduce_mean(tf.divide(ctc_loss, tf.cast(conv_output_size, tf.float32)))
 
                 self.increment_total_loss = tf.assign_add(self.total_loss, mean_loss)
                 self.reset_total_loss = tf.assign(self.total_loss, 0)
@@ -650,7 +658,7 @@ class AcousticModel(object):
 
             # learning rate decay
             with tf.name_scope("train"):
-                lr = self.decaying_learning_rate()
+                lr = self.decaying_learning_rate(size_x=conv_output_size)
 
                 # use AdamOptimizer to compute the gradients and minimize the average of ctc_loss (training the model)
                 optimizer = self.optimizer_fun(learning_rate=lr, epsilon=self.epsilon)
@@ -808,10 +816,18 @@ class AcousticModel(object):
                         self.update_epoch_mean_cer,
                         self.increment_total_loss]
         if self.config["debug"]:
-            if self.print_labels:
-                train_tensors.append(self.print_labels_op)
+            if self.print_batch_x:
+                test_tensors.append(self.print_batch_x_op)
+            if self.print_conv:
+                test_tensors.append(self.print_conv_op)
             if self.print_dropout:
-                train_tensors.append(self.print_dropout_op)
+                test_tensors.append(self.print_dropout_op)
+            if self.print_rnn_outputs:
+                test_tensors.append(self.print_rnn_outputs_op)
+            if self.print_lr:
+                test_tensors.append(self.print_lr_op)
+            if self.print_labels:
+                test_tensors.append(self.print_labels_op)
         try:
             with tqdm(range(num_test_batches), unit="batch") as timer:
                 while True:
