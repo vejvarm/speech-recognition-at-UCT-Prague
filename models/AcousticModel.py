@@ -36,10 +36,10 @@ class AcousticModel(object):
     cepstrum_pad_val: float
     label_pad_val: int
     num_data: int
+    min_time: int
     max_time: int
     num_features: int
-    ds_train: tf.data.Dataset
-    ds_test: tf.data.Dataset
+    ds: tf.data.Dataset
     inputs: Dict[str, Union[tf.Tensor, tf.Operation]]
     outputs: Dict[str, Union[tf.Tensor, tf.Operation]]
     global_step: tf.Tensor
@@ -49,6 +49,7 @@ class AcousticModel(object):
     batch_size: int
     tt_ratio: float
     shuffle_seed: int
+    bucket_width: int
     decay_by_epochs: bool
     decay_by_length: bool
     d_by_epo_rate: float
@@ -134,10 +135,13 @@ class AcousticModel(object):
 
         # Data-inferred parameters (check load_data())#
         self.num_data = None  # total number of individual data in the loaded dataset
-        self.max_time = None  # maximal time unrolling of the BiRNN
+        self.min_time = None  # minimal time unrolling of the BiRNN (minimal value in time dim of the data)
+        self.max_time = None  # maximal time unrolling of the BiRNN (maximal value in time dim of the data)
         self.num_features = None  # number of features in the loaded MFCC cepstra
-        self.ds_train = None  # tf.Dataset object with elements of training data with components (cepstrum, label)
-        self.ds_test = None  # tf.Dataset object with elements of testing data with components (cepstrum, label)
+        self.ds_train = None  # (tf.Dataset) training data with components (cepstrum, label, size_cepstrum, size_label)
+        self.ds_test = None  # (tf.Dataset) testing data with components (cepstrum, label, size_cepstrum, size_label)
+        self.num_train_batches = None  # (int32) maximum number of train batches in epoch
+        self.num_test_batches = None  # (int32) maximum number of test batches in epoch
         self.inputs = None  # dictionary with the inputs to model from batched dataset iterators
         self.outputs = None  # dictionary with outputs from the model
         self.global_step = None  # (int) counter for current epoch
@@ -162,6 +166,7 @@ class AcousticModel(object):
             self.batch_size = self.config['batch_size']  # (int) size of mini-batches during learning from epoch
             self.tt_ratio = self.config['tt_ratio']  # (float) train-test data split ratio
             self.shuffle_seed = self.config['shuffle_seed']  # (int) seed for shuffling the cepstra and labels
+            self.bucket_width = self.config['bucket_width']  # (int) width of buckets for bucketing
 
             # decay
             self.decay_by_epochs = self.config['decay_by_epochs']
@@ -258,7 +263,7 @@ class AcousticModel(object):
         # can be added this way, here
         with self.graph.as_default():
             self.saver = tf.train.Saver(
-                max_to_keep=50,
+                max_to_keep=20,
             )
 
         # Add all the other common code for the initialization here
@@ -281,9 +286,9 @@ class AcousticModel(object):
         :ivar self.ds_test (tf.data.Dataset object)
 
         Structure of the elements in instance variables self.ds_train and self.ds_test:
-            (cepstrum, label, max_time_cepstrum, length_label)
+            (cepstrum, label, time_cepstrum, length_label)
 
-        :return None
+        :return :ivar self.ds_train, :ivar self.ds_test
 
         """
         cepstra, _ = load_cepstra(self.load_dir)
@@ -306,17 +311,8 @@ class AcousticModel(object):
         else:
             raise ValueError("The number of features is not identical in all loaded cepstrum files.")
         # get number of time frames of the longest cepstrum
-        self.max_time = max(cepstrum.shape[0] for cepstrum in cepstra)
-
-        # split cepstra and labels into traning and testing parts
-        len_train = int(self.tt_ratio * self.num_data)  # length of the training data
-        len_test = self.num_data - int(self.tt_ratio * self.num_data)  # length of the testing data
-        slice_train = slice(0, len_train)  # training part of the data
-        slice_test = slice(len_train, None)  # testing part of the data
-        x_train = cepstra[slice_train]
-        y_train = labels[slice_train]
-        x_test = cepstra[slice_test]
-        y_test = labels[slice_test]
+        self.min_time, self.max_time = (min(cepstrum.shape[0] for cepstrum in cepstra),
+                                        max(cepstrum.shape[0] for cepstrum in cepstra))
 
         with self.graph.as_default():
             with tf.name_scope('input_pipeline'):
@@ -324,37 +320,41 @@ class AcousticModel(object):
                 data_types = (tf.float32, tf.int32)
                 data_shapes = (tf.TensorShape([None, self.num_features]), tf.TensorShape([None]))
 
-                ds_train = tf.data.Dataset.from_generator(lambda: zip(x_train, y_train),
-                                                          data_types,
-                                                          data_shapes
-                                                          )
-                ds_test = tf.data.Dataset.from_generator(lambda: zip(x_test, y_test),
-                                                         data_types,
-                                                         data_shapes
-                                                         )
+                ds = tf.data.Dataset.from_generator(lambda: zip(cepstra, labels), data_types, data_shapes)
 
-                # create two more components which contain the sizes of the cepstra and labels
-                self.ds_train = ds_train.map(lambda x, y: (x, y, tf.shape(x)[0], tf.size(y)),
-                                             num_parallel_calls=self.num_cpu_cores)
-                self.ds_test = ds_test.map(lambda x, y: (x, y, tf.shape(x)[0], tf.size(y)),
-                                           num_parallel_calls=self.num_cpu_cores)
+                ds = ds.shuffle(buffer_size=self.num_data,
+                                seed=self.shuffle_seed,
+                                reshuffle_each_iteration=False)
+
+                ds = ds.map(lambda x, y: (x, y, tf.shape(x)[0], tf.size(y)),
+                            num_parallel_calls=self.num_cpu_cores)
+
+                # split into training and testing dataset
+                len_train = int(self.num_data*self.tt_ratio)
+
+                self.ds_train = ds.take(len_train)
+                self.ds_test = ds.skip(len_train)
+
+    @staticmethod
+    def elem_length_fn(x, y, size_x, size_y):
+        return size_x
 
     def prepare_data(self):
         """Prepare datasets for iteration through the model
 
-        :ivar self.inputs_train
-        :ivar self.inputs_test
+        :ivar self.ds
 
         :return None
 
         """
 
-        num_train_batches = np.ceil(self.num_data * self.tt_ratio / self.batch_size).astype(np.int32)
-        num_test_batches = np.ceil(self.num_data * (1 - self.tt_ratio) / self.batch_size).astype(np.int32)
-
         with self.graph.as_default():
             with tf.name_scope('input_pipeline'):
+
                 # combine the elements in datasets into batches of padded components
+                bucket_boundaries = list(range(self.min_time, self.max_time + 1, self.bucket_width))
+                num_buckets = len(bucket_boundaries)+1
+                bucket_batch_sizes = [self.batch_size]*num_buckets
                 padded_shapes = (tf.TensorShape([None, self.num_features]),  # cepstra padded to maximum time in batch
                                  tf.TensorShape([None]),  # labels padded to maximum length in batch
                                  tf.TensorShape([]),  # sizes not padded
@@ -364,17 +364,33 @@ class AcousticModel(object):
                                   0,  # size(cepstrum) -- unused
                                   0)  # size(label) -- unused
 
-                ds_train = self.ds_train.padded_batch(self.batch_size, padded_shapes, padding_values,
-                                                      drop_remainder=False)
-                ds_test = self.ds_test.padded_batch(self.batch_size, padded_shapes, padding_values,
-                                                    drop_remainder=False)
+                bucket_transformation = tf.data.experimental.bucket_by_sequence_length(
+                    element_length_func=self.elem_length_fn,
+                    bucket_boundaries=bucket_boundaries,
+                    bucket_batch_sizes=bucket_batch_sizes,
+                    padded_shapes=padded_shapes,
+                    padding_values=padding_values
+                )
 
-                # shuffle the batches (bucketing)
-                ds_train = ds_train.shuffle(buffer_size=num_train_batches,
-                                            seed=self.shuffle_seed,
+                ds_train = self.ds_train.apply(bucket_transformation)
+                ds_test = self.ds_test.apply(bucket_transformation)
+
+                # ds_train = self.ds_train.padded_batch(self.batch_size, padded_shapes, padding_values,
+                #                                       drop_remainder=False)
+                # ds_test = self.ds_test.padded_batch(self.batch_size, padded_shapes, padding_values,
+                #                                     drop_remainder=False)
+
+                # calculate maximum number of batches
+                self.num_train_batches = (np.ceil(self.num_data*self.tt_ratio/self.batch_size)
+                                          + num_buckets).astype(np.int32)
+                self.num_test_batches = (np.ceil(self.num_data*(1 - self.tt_ratio)/self.batch_size)
+                                         + num_buckets).astype(np.int32)
+
+                # shuffle the batches after bucketing
+                # TODO: test this out (we need to somehow get number of batches after bucketing)
+                ds_train = ds_train.shuffle(buffer_size=self.num_train_batches,
                                             reshuffle_each_iteration=True).prefetch(1)
-                ds_test = ds_test.shuffle(buffer_size=num_test_batches,
-                                          seed=self.shuffle_seed,
+                ds_test = ds_test.shuffle(buffer_size=self.num_test_batches,
                                           reshuffle_each_iteration=True).prefetch(1)
 
                 # make initialisable iterator over the dataset which will return the batches of (x, y, size_x, size_y)
@@ -760,9 +776,6 @@ class AcousticModel(object):
     def learn_from_epoch(self):
         output = None
 
-        num_train_batches = np.ceil(self.num_data * self.tt_ratio / self.batch_size).astype(np.int32)
-        num_test_batches = np.ceil(self.num_data * (1 - self.tt_ratio) / self.batch_size).astype(np.int32)
-
         epoch = self.sess.run(self.global_step)
 
         print("\n_____EPOCH %d" % epoch)
@@ -790,7 +803,7 @@ class AcousticModel(object):
             if self.print_labels:
                 train_tensors.append(self.print_labels_op)
         try:
-            with tqdm(range(num_train_batches), unit="batch") as timer:
+            with tqdm(range(self.num_train_batches), unit="batch") as timer:
                 while True:
                     _, batch_no = self.sess.run([self.increment_batch_no_op, self.batch_no])
                     mean_loss, *_ = self.sess.run(train_tensors,
@@ -830,7 +843,7 @@ class AcousticModel(object):
             if self.print_labels:
                 test_tensors.append(self.print_labels_op)
         try:
-            with tqdm(range(num_test_batches), unit="batch") as timer:
+            with tqdm(range(self.num_test_batches), unit="batch") as timer:
                 while True:
                     _, batch_no = self.sess.run([self.increment_batch_no_op, self.batch_no])
                     mean_loss, output, mean_cer, *_ = self.sess.run(test_tensors,
