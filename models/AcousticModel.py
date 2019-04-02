@@ -71,6 +71,7 @@ class AcousticModel(object):
     relu_clip: float
     rnn_num_hidden: List[int]
     rnn_use_peephole: bool
+    rnn_batch_norm: bool  # TODO: implement
     dropout_probs: List[float]
     ctc_collapse_repeated: bool
     ctc_merge_repeated: bool
@@ -194,8 +195,11 @@ class AcousticModel(object):
             self.ff_batch_norm = self.config['ff_batch_norm']  # (bool) use batch normalisation in feed forward layers
             self.relu_clip = self.config['relu_clip']  # (float) preventing exploding gradient with relu clipping
 
-            self.rnn_num_hidden = self.config['rnn_num_hidden']  # (list of ints) number of hidden units in LSTM cells
-            self.rnn_use_peephole = self.config['rnn_use_peephole']  # (bool) use peephole connections in the LSTM cells
+            self.rnn_num_hidden = self.config['rnn_num_hidden']  # (list of ints) number of hidden units in RNN cells
+            # TODO: implement ->
+            self.rnn_use_peephole = self.config['rnn_use_peephole']  # (bool) use peephole connections in the RNN cells
+            self.rnn_batch_norm = self.config['rnn_batch_norm']  # (bool) use batch normalization after last RNN layer
+            # TODO: <- implement
 
             # Dropout
             self.dropout_probs = self.config['dropout_probs']  # (List[float]) [after CONVSs, after RNNs, after logits]
@@ -459,7 +463,7 @@ class AcousticModel(object):
 
             conv = tf.nn.conv2d(x, filt, strides, padding, data_format=data_format, dilations=dilations, name=name)
 
-            conv = tf.minimum(tf.nn.relu(conv), self.relu_clip)
+            conv = tf.minimum(tf.nn.leaky_relu(conv), self.relu_clip)
 
             if batch_norm:
                 conv = self.batch_norm_layer(conv, is_train, data_format, scope)
@@ -601,7 +605,7 @@ class AcousticModel(object):
                     conv_output_size = ph_size_x
 
             # 4th layer: stacked BiRNN with LSTM cells
-            with tf.variable_scope("layer_4", initializer=initializer):
+            with tf.variable_scope("layer_4", initializer=initializer) as scope:
                 with tf.name_scope("birnn"):
                     cells_fw = [self.rnn_cell(n) for n in self.rnn_num_hidden]  # list of forward direction cells
                     cells_bw = [self.rnn_cell(n) for n in self.rnn_num_hidden]  # list of backward direction cells
@@ -627,7 +631,7 @@ class AcousticModel(object):
                     # rnn_outputs: Tensor of shape [batch_time, batch_size, 2*num_hidden]
 
                     # __ACTIVATION__ clipped *ELU activation to the rnn outputs
-                    rnn_outputs = tf.minimum(tf.nn.relu(rnn_outputs), self.relu_clip)
+                    rnn_outputs = tf.minimum(tf.nn.leaky_relu(rnn_outputs), self.relu_clip)
 
                     # __DROPOUT__ after the RNN layer's nonlinearity (*ELU) function
                     rnn_outputs = tf.nn.dropout(rnn_outputs, keep_prob=(1.0 - ph_dropout[1]))
