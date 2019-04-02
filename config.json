@@ -1,6 +1,7 @@
 {
   "best": false,
   "debug": false,
+  "input_format": "numpy",
   "load_dir": "C:/!temp/MFSC_small",
   "save_dir": "./data/results/",
   "do_train": true,
@@ -34,7 +35,7 @@
 
   "conv_switch": true,
   "conv_filter_dims": [[11, 21], [11, 11], [11, 11]],
-  "conv_strides": [[2, 2], [1, 2], [1, 2]],
+  "conv_strides": [[1, 2], [1, 2], [1, 2]],
   "conv_in_channels": [1, 32, 32],
   "conv_out_channels": [32, 32, 32],
   "conv_dilations": [[1, 1], [1, 1], [1, 1]],
@@ -49,8 +50,9 @@
 
   "rnn_num_hidden": [512, 512],
   "rnn_use_peephole": true,
+  "rnn_batch_norm": false,
 
-  "dropout_probs": [0.2, 0.2, 0.2],
+  "dropout_probs": [0.0, 0.2, 0.1],
 
   "ctc_collapse_repeated": true,
   "ctc_merge_repeated": true,

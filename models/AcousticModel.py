@@ -23,8 +23,9 @@ from utils.AMSGrad import AMSGrad
 load_cepstra = FeatureExtractor.load_cepstra  # for loading  cepstrum-###.npy files from a folder into a list of lists
 load_labels = DataLoader.load_labels  # for loading transcript-###.npy files from folder into a list of lists
 
-# TODO: try using tf.contrib.rnn.GridLSTMCell instead of stacked bidirectional LSTM
+
 class AcousticModel(object):
+    input_format: str
     load_dir: str
     save_dir: str
     do_train: bool
@@ -122,6 +123,7 @@ class AcousticModel(object):
             print('Loaded configuration: ', self.config)
 
         # SETTINGS #
+        self.input_format = self.config['input_format']  # "numpy" for .npy files / "tfrecord" for .tfrecord files
         self.load_dir = self.config['load_dir']  # directory from which to load MFCC data (works with nested dirs)
         self.save_dir = self.config['save_dir']  # directory in which to save the checkpoints and results
         self.do_train = self.config['do_train']  # if True, training will be commenced, else inference will be commenced
@@ -283,6 +285,19 @@ class AcousticModel(object):
         # Initialize the model
         self.init()
 
+    def parse_proto(self, example_proto):
+        features = {
+            'x': tf.FixedLenSequenceFeature([self.num_features], tf.float32, allow_missing=True),
+            'y': tf.FixedLenSequenceFeature([], tf.int64, allow_missing=True),
+        }
+        parsed_features = tf.parse_single_example(example_proto, features)
+        return parsed_features['x'], parsed_features['y']
+
+    def read_tfrecords(self, file_names=("file1.tfrecord", "file2.tfrecord", "file3.tfrecord")):
+        dataset = tf.data.TFRecordDataset(file_names)
+        dataset = dataset.map(self.parse_proto)
+        return dataset
+
     def load_data(self):
         """ load cepstra and labels from load_dir, shuffle them and split them into training and testing datasets
         :ivar self.ds_train (tf.data.Dataset object)
@@ -294,36 +309,56 @@ class AcousticModel(object):
         :return :ivar self.ds_train, :ivar self.ds_test
 
         """
-        cepstra, _ = load_cepstra(self.load_dir)
-        labels, _ = load_labels(self.load_dir)
-
-        # tests
-        assert cepstra[0][0].dtype == np.float64, 'cepstra should be a list of lists with np arrays of dtype float64'
-        assert labels[0][0].dtype == np.uint8, 'labels should be a list of lists with np arrays of dtype uint8'
-
-        # flatten the lists to length (sum(n_files for n_files in subfolders))
-        cepstra = [item for sublist in cepstra for item in sublist]
-        labels = [item for sublist in labels for item in sublist]
-
-        # get the total number of data loaded
-        self.num_data = len(cepstra)
-        # get number of features in loaded cepstra
-        num_features_gen = (cepstrum.shape[1] for cepstrum in cepstra)
-        if check_equal(num_features_gen):
-            self.num_features = cepstra[0].shape[1]
-        else:
-            raise ValueError("The number of features is not identical in all loaded cepstrum files.")
-        # get number of time frames of the longest cepstrum
-        self.min_time, self.max_time = (min(cepstrum.shape[0] for cepstrum in cepstra),
-                                        max(cepstrum.shape[0] for cepstrum in cepstra))
-
         with self.graph.as_default():
             with tf.name_scope('input_pipeline'):
-                # create tf Dataset objects from the training and testing data
-                data_types = (tf.float32, tf.int32)
-                data_shapes = (tf.TensorShape([None, self.num_features]), tf.TensorShape([None]))
+                if self.input_format == "numpy":
+                    cepstra, _ = load_cepstra(self.load_dir)
+                    labels, _ = load_labels(self.load_dir)
 
-                ds = tf.data.Dataset.from_generator(lambda: zip(cepstra, labels), data_types, data_shapes)
+                    # tests
+                    assert cepstra[0][0].dtype == np.float64, 'cepstra should be a list of lists with np arrays of dtype float64'
+                    assert labels[0][0].dtype == np.uint8, 'labels should be a list of lists with np arrays of dtype uint8'
+
+                    # flatten the lists to length (sum(n_files for n_files in subfolders))
+                    cepstra = [item for sublist in cepstra for item in sublist]
+                    labels = [item for sublist in labels for item in sublist]
+
+                    # get the total number of data loaded
+                    self.num_data = len(cepstra)
+                    # get number of features in loaded cepstra
+                    num_features_gen = (cepstrum.shape[1] for cepstrum in cepstra)
+                    if check_equal(num_features_gen):
+                        self.num_features = cepstra[0].shape[1]
+                    else:
+                        raise ValueError("The number of features is not identical in all loaded cepstrum files.")
+                    # get number of time frames of the longest cepstrum
+                    self.min_time, self.max_time = (min(cepstrum.shape[0] for cepstrum in cepstra),
+                                                    max(cepstrum.shape[0] for cepstrum in cepstra))
+
+
+                    # create tf Dataset objects from the training and testing data
+                    data_types = (tf.float32, tf.int64)
+                    data_shapes = (tf.TensorShape([None, self.num_features]), tf.TensorShape([None]))
+
+                    ds = tf.data.Dataset.from_generator(lambda: zip(cepstra, labels), data_types, data_shapes)
+                elif self.input_format == "tfrecord":
+
+                    # get list of all .tfrecord files in self.load_dir
+                    dir_files = os.listdir(self.load_dir)  # TODO: will not work for nested files
+                    tfrecord_files = [os.path.join(self.load_dir, f)
+                                      for f in dir_files if os.path.splitext(f)[1] == ".tfrecord"]
+
+                    # load tfrecord files into data.Dataset object ds
+                    ds = self.read_tfrecords(file_names=tfrecord_files)
+
+                    # TODO: when using input_format == "tfrecord", define num_data, num_features, min_time and max_time
+                    # temporary hack for testing
+                    self.num_data = 26804
+                    self.num_features = 123
+                    self.min_time = 100
+                    self.max_time = 3000
+                else:
+                    raise ValueError("input_format must be eiher 'numpy' or 'tfrecord'")
 
                 ds = ds.shuffle(buffer_size=self.num_data,
                                 seed=self.shuffle_seed,
