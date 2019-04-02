@@ -10,7 +10,7 @@ from DataLoader import DataLoader
 def serialize_array(x, y):
     feature = {
         'x': tf.train.Feature(float_list=tf.train.FloatList(value=x.flatten())),
-        'y': tf.train.Feature(float_list=tf.train.FloatList(value=y.flatten()))
+        'y': tf.train.Feature(int64_list=tf.train.Int64List(value=y.flatten()))
     }
     example = tf.train.Example(features=tf.train.Features(feature=feature))
     return example.SerializeToString()
