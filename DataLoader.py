@@ -58,34 +58,44 @@ class DataLoader:
 
     def num2char(self, arraylist):
         """ Transform list of numpy arrays with chacater numbers to list of sentences """
-
         return [''.join([self.n2c_map[o] for o in arr]) for arr in arraylist]
 
 
     @staticmethod
-    def load_labels(folder='./data'):
+    def load_labels(path_to_files='./data'):
         """ Load labels of transcripts from transcript-###.npy files in specified folder
         into a list of lists of 1D numpy arrays
-        :param folder: string path leading to the folder with transcript files
+        :param path_to_files: string path leading to the folder with transcript files or .npy trascript file
 
-        :return list of lists of 2D numpy arrays, list of lists of strings with paths to files
+        :return list of lists of 1D numpy arrays, list of lists of strings with paths to files
         """
-        labels = []
-        path_list = []
-        subfolders = [os.path.join(folder, subfolder) for subfolder in next(os.walk(folder))[1]]
 
-        # if there are no subfolders in the provided folder, look for the transcripts directly in folder
-        if not subfolders:
-            subfolders.append(folder)
+        ext = os.path.splitext(path_to_files)[1]
 
-        for sub in subfolders:
-            files = [os.path.splitext(f) for f in os.listdir(sub) if
-                     os.path.isfile(os.path.join(sub, f))]
-            paths = [os.path.abspath(os.path.join(sub, ''.join(file)))
-                     for file in files if 'transcript' in file[0] and file[-1] == '.npy']
-            sublabels = [np.load(path) for path in paths]
-            path_list.append(paths)
-            labels.append(sublabels)
+        # if path_to_files leads to a single (.npy) file , load only the one file
+        if ext == ".npy":
+            labels = [[np.load(path_to_files)]]
+            path_list = [[os.path.abspath(path_to_files)]]
+        elif not ext:
+            # if the path_to_files contains subfolders, load data from all subfolders
+            labels = []
+            path_list = []
+            subfolders = [os.path.join(path_to_files, subfolder) for subfolder in next(os.walk(path_to_files))[1]]
+
+            # if there are no subfolders in the provided path_to_files, look directly in path_to_files
+            if not subfolders:
+                subfolders.append(path_to_files)
+
+            for sub in subfolders:
+                files = [os.path.splitext(f) for f in os.listdir(sub) if
+                         os.path.isfile(os.path.join(sub, f))]
+                paths = [os.path.abspath(os.path.join(sub, ''.join(file)))
+                         for file in files if 'transcript' in file[0] and file[-1] == '.npy']
+                sublabels = [np.load(path) for path in paths]
+                path_list.append(paths)
+                labels.append(sublabels)
+        else:
+            raise IOError("Specified file doesn't have .npy suffix.")
 
         return labels, path_list
 
