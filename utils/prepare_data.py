@@ -77,16 +77,12 @@ def prepare_data(files, save_folder, feature_type="MFSC", energy=True, deltas=(0
             # add (cepstrum_path, label_path, cepstrum_length) tuple into collective list for sorting
             cepstra_length_list.append((loaded_cepstra_paths[j], loaded_label_paths[j], loaded_cepstra[j].shape[0]))
 
-        print(cepstra_length_list)
-
         print('files from {} transformed and saved into {}.'.format(file_names[i], os.path.abspath(save_folder)))
 
     # sort cepstra and labels by time length (number of frames)
     if sort:
         sort_indices = np.argsort([c[2] for c in cepstra_length_list])  # indices which sort the lists by cepstra length
         cepstra_length_list = [cepstra_length_list[i] for i in sort_indices]  # sort the cepstra list
-
-        print(cepstra_length_list)
 
         num_digits = len(str(len(cepstra_length_list)))
 
