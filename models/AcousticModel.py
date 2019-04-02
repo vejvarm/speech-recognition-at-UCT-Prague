@@ -23,7 +23,6 @@ from utils.AMSGrad import AMSGrad
 load_cepstra = FeatureExtractor.load_cepstra  # for loading  cepstrum-###.npy files from a folder into a list of lists
 load_labels = DataLoader.load_labels  # for loading transcript-###.npy files from folder into a list of lists
 
-
 # TODO: try using tf.contrib.rnn.GridLSTMCell instead of stacked bidirectional LSTM
 class AcousticModel(object):
     load_dir: str

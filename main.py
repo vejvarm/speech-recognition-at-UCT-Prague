@@ -2,6 +2,9 @@ import time
 
 from models.AcousticModel import AcousticModel
 
+# TODO: efficient dataset pipeline (work with only paths to files until needed)
+# https://www.tensorflow.org/tutorials/load_data/images
+
 # __ DS2: https://arxiv.org/pdf/1512.02595.pdf __
 # GRU or even simple RNN instead of LSTM
 # 1D or 2D convolution as the first layer (with stride > 1 for reducing sequence length for RNN)
