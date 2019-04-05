@@ -282,6 +282,10 @@ class AcousticModel(object):
         self.sw_train = tf.summary.FileWriter(self.checkpoint_save_path + '/train', self.sess.graph)
         self.sw_test = tf.summary.FileWriter(self.checkpoint_save_path + '/test')
 
+        # initialize iterator handles
+        self.handle_train = self.sess.run("prepare_data/handle_train:0")
+        self.handle_test = self.sess.run("prepare_data/handle_test:0")
+
         # Initialize the model
         self.init()
 
@@ -310,7 +314,15 @@ class AcousticModel(object):
 
         """
         with self.graph.as_default():
-            with tf.name_scope('input_pipeline'):
+            with tf.name_scope('load_data'):
+
+                # TODO: when using input_format == "tfrecord", define num_data, num_features, min_time and max_time
+                # temporary hack for testing
+                self.num_data = 26804
+                self.num_features = 123
+                self.min_time = 100
+                self.max_time = 3000
+
                 if self.input_format == "numpy":
                     cepstra, _ = load_cepstra(self.load_dir)
                     labels, _ = load_labels(self.load_dir)
@@ -350,13 +362,6 @@ class AcousticModel(object):
 
                     # load tfrecord files into data.Dataset object ds
                     ds = self.read_tfrecords(file_names=tfrecord_files)
-
-                    # TODO: when using input_format == "tfrecord", define num_data, num_features, min_time and max_time
-                    # temporary hack for testing
-                    self.num_data = 26804
-                    self.num_features = 123
-                    self.min_time = 100
-                    self.max_time = 3000
                 else:
                     raise ValueError("input_format must be eiher 'numpy' or 'tfrecord'")
 
@@ -387,7 +392,10 @@ class AcousticModel(object):
         """
 
         with self.graph.as_default():
-            with tf.name_scope('input_pipeline'):
+            with tf.name_scope('prepare_data'):
+
+                # placeholder for choosing train/test iterator
+                ph_handle = tf.placeholder(tf.string, shape=[], name="ph_handle")
 
                 # combine the elements in datasets into batches of padded components
                 bucket_boundaries = list(range(self.min_time, self.max_time + 1, self.bucket_width))
@@ -398,7 +406,7 @@ class AcousticModel(object):
                                  tf.TensorShape([]),  # sizes not padded
                                  tf.TensorShape([]))  # sizes not padded
                 padding_values = (tf.constant(self.cepstrum_pad_val, dtype=tf.float32),  # cepstra padded with 0.0
-                                  tf.constant(self.label_pad_val, dtype=tf.int32),  # labels padded with -1
+                                  tf.constant(self.label_pad_val, dtype=tf.int64),  # labels padded with -1
                                   0,  # size(cepstrum) -- unused
                                   0)  # size(label) -- unused
 
@@ -424,28 +432,37 @@ class AcousticModel(object):
                 self.num_test_batches = (np.ceil(self.num_data*(1 - self.tt_ratio)/self.batch_size)
                                          + num_buckets).astype(np.int32)
 
-                # shuffle the batches after bucketing
-                # TODO: test this out (we need to somehow get number of batches after bucketing)
+                # shuffle the training batches after bucketing
+                # TODO: Implement SortaGrad
                 ds_train = ds_train.shuffle(buffer_size=self.num_train_batches,
-                                            reshuffle_each_iteration=True).prefetch(1)
-                ds_test = ds_test.shuffle(buffer_size=self.num_test_batches,
-                                          reshuffle_each_iteration=True).prefetch(1)
+                                            reshuffle_each_iteration=True)
 
-                # make initialisable iterator over the dataset which will return the batches of (x, y, size_x, size_y)
-                iterator = tf.data.Iterator.from_structure(ds_train.output_types, ds_train.output_shapes)
+                # repeat the training set indefinitely
+                ds_train = ds_train.repeat()
+
+                # prefetch values for better producer/consumer overlap
+                ds_train = ds_train.prefetch(tf.contrib.data.AUTOTUNE)
+                ds_test = ds_test.prefetch(tf.contrib.data.AUTOTUNE)
+
+                # make iterator over the dataset which will return the batches of (x, y, size_x, size_y)
+                iterator = tf.data.Iterator.from_string_handle(ph_handle, ds_train.output_types, ds_train.output_shapes)
                 x, y, size_x, size_y = iterator.get_next()
 
                 # make initializers over the training and testing datasets
-                iterator_train_init = iterator.make_initializer(ds_train)
-                iterator_test_init = iterator.make_initializer(ds_test)
+                iterator_train = ds_train.make_one_shot_iterator()
+                iterator_test = ds_test.make_initializable_iterator()
+                init_test = iterator_test.initializer
+
+                # get handles for train and test iterators which can be fed to ph_handle
+                handle_train = iterator_train.string_handle(name="handle_train")
+                handle_test = iterator_test.string_handle(name="handle_test")
 
                 # Build instance dictionary with the iterator data and operations
                 self.inputs = {"x": x,
                                "y": y,
                                "size_x": size_x,
                                "size_y": size_y,
-                               "init_train": iterator_train_init,
-                               "init_test": iterator_test_init}
+                               "init_test": init_test}
 
     @staticmethod
     def batch_norm_layer(x, is_train, data_format, scope):
@@ -578,7 +595,6 @@ class AcousticModel(object):
             ph_dropout = tf.placeholder(tf.float32, [len(self.dropout_probs)], name="ph_dropout")
 
             batch_size = tf.shape(self.inputs["x"])[0]
-            print(batch_size)
 
             # Step tracking tensors and update ops
             self.global_step = tf.Variable(0, trainable=False, name='global_step', dtype=tf.int32)
@@ -691,7 +707,7 @@ class AcousticModel(object):
 
             # convert labels to sparse tensor
             with tf.name_scope("labels"):
-                labels = tf.contrib.layers.dense_to_sparse(ph_y, eos_token=self.label_pad_val)
+                labels = tf.contrib.layers.dense_to_sparse(tf.cast(ph_y, tf.int32), eos_token=self.label_pad_val)
 
             # calculate ctc loss of logits
             with tf.name_scope("ctc_loss"):
@@ -818,7 +834,6 @@ class AcousticModel(object):
 
         print("\n_____EPOCH %d" % epoch)
         # TRAINING Dataset
-        self.sess.run(self.inputs["init_train"])
         print("\n_____TRAINING DATA_____")
         train_tensors = [self.outputs["mean_loss"],
                          self.increment_total_loss,
@@ -840,24 +855,25 @@ class AcousticModel(object):
                 train_tensors.append(self.print_grad_norm_op)
             if self.print_labels:
                 train_tensors.append(self.print_labels_op)
-        try:
-            with tqdm(range(self.num_train_batches), unit="batch") as timer:
-                while True:
-                    _, batch_no = self.sess.run([self.increment_batch_no_op, self.batch_no])
-                    mean_loss, *_ = self.sess.run(train_tensors,
-                                                  feed_dict={"ph_is_train:0": True,
-                                                             "ph_dropout:0": self.dropout_probs})
-                    timer.update(1)
-                    if batch_no % 10 == 0:
-                        print("BATCH {} | Loss {}".format(batch_no, mean_loss))
-        except tf.errors.OutOfRangeError:
-            # update train summary (only with total loss)
-            summary, total_loss = self.sess.run([self.smr_total_loss, self.total_loss])
-            self.sw_train.add_summary(summary, epoch)
-            # print results to console
-            print("Total Loss: {}".format(total_loss))
-            # reset summary variables
-            self.sess.run([self.reset_total_loss, self.reset_batch_no])
+
+        with tqdm(range(self.num_train_batches), unit="batch") as timer:
+            for _ in range(self.num_train_batches):
+                _, batch_no = self.sess.run([self.increment_batch_no_op, self.batch_no])
+                mean_loss, *_ = self.sess.run(train_tensors,
+                                              feed_dict={"prepare_data/ph_handle:0": self.handle_train,
+                                                         "ph_is_train:0": True,
+                                                         "ph_dropout:0": self.dropout_probs})
+                timer.update(1)
+                if batch_no % 10 == 0:
+                    print("BATCH {} | Loss {}".format(batch_no, mean_loss))
+
+        # update train summary (only with total loss)
+        summary, total_loss = self.sess.run([self.smr_total_loss, self.total_loss])
+        self.sw_train.add_summary(summary, epoch)
+        # print results to console
+        print("Total Loss: {}".format(total_loss))
+        # reset summary variables
+        self.sess.run([self.reset_total_loss, self.reset_batch_no])
 
         # TESTING Dataset
         self.sess.run(self.inputs["init_test"])
@@ -885,7 +901,8 @@ class AcousticModel(object):
                 while True:
                     _, batch_no = self.sess.run([self.increment_batch_no_op, self.batch_no])
                     mean_loss, output, mean_cer, *_ = self.sess.run(test_tensors,
-                                                                    feed_dict={"ph_is_train:0": False,
+                                                                    feed_dict={"prepare_data/ph_handle:0": self.handle_test,
+                                                                               "ph_is_train:0": False,
                                                                                "ph_dropout:0": [0.0, 0.0, 0.0]})
                     timer.update(1)
                     if batch_no % 5 == 0:
