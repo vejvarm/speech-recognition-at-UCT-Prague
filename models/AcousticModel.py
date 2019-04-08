@@ -23,8 +23,9 @@ from utils.AMSGrad import AMSGrad
 load_cepstra = FeatureExtractor.load_cepstra  # for loading  cepstrum-###.npy files from a folder into a list of lists
 load_labels = DataLoader.load_labels  # for loading transcript-###.npy files from folder into a list of lists
 
-# TODO: try using tf.contrib.rnn.GridLSTMCell instead of stacked bidirectional LSTM
+
 class AcousticModel(object):
+    input_format: str
     load_dir: str
     save_dir: str
     do_train: bool
@@ -122,6 +123,7 @@ class AcousticModel(object):
             print('Loaded configuration: ', self.config)
 
         # SETTINGS #
+        self.input_format = self.config['input_format']  # "numpy" for .npy files / "tfrecord" for .tfrecord files
         self.load_dir = self.config['load_dir']  # directory from which to load MFCC data (works with nested dirs)
         self.save_dir = self.config['save_dir']  # directory in which to save the checkpoints and results
         self.do_train = self.config['do_train']  # if True, training will be commenced, else inference will be commenced
@@ -280,8 +282,25 @@ class AcousticModel(object):
         self.sw_train = tf.summary.FileWriter(self.checkpoint_save_path + '/train', self.sess.graph)
         self.sw_test = tf.summary.FileWriter(self.checkpoint_save_path + '/test')
 
+        # initialize iterator handles
+        self.handle_train = self.sess.run("prepare_data/handle_train:0")
+        self.handle_test = self.sess.run("prepare_data/handle_test:0")
+
         # Initialize the model
         self.init()
+
+    def parse_proto(self, example_proto):
+        features = {
+            'x': tf.FixedLenSequenceFeature([self.num_features], tf.float32, allow_missing=True),
+            'y': tf.FixedLenSequenceFeature([], tf.int64, allow_missing=True),
+        }
+        parsed_features = tf.parse_single_example(example_proto, features)
+        return parsed_features['x'], parsed_features['y']
+
+    def read_tfrecords(self, file_names=("file1.tfrecord", "file2.tfrecord", "file3.tfrecord")):
+        dataset = tf.data.TFRecordDataset(file_names)
+        dataset = dataset.map(self.parse_proto)
+        return dataset
 
     def load_data(self):
         """ load cepstra and labels from load_dir, shuffle them and split them into training and testing datasets
@@ -294,36 +313,57 @@ class AcousticModel(object):
         :return :ivar self.ds_train, :ivar self.ds_test
 
         """
-        cepstra, _ = load_cepstra(self.load_dir)
-        labels, _ = load_labels(self.load_dir)
-
-        # tests
-        assert cepstra[0][0].dtype == np.float64, 'cepstra should be a list of lists with np arrays of dtype float64'
-        assert labels[0][0].dtype == np.uint8, 'labels should be a list of lists with np arrays of dtype uint8'
-
-        # flatten the lists to length (sum(n_files for n_files in subfolders))
-        cepstra = [item for sublist in cepstra for item in sublist]
-        labels = [item for sublist in labels for item in sublist]
-
-        # get the total number of data loaded
-        self.num_data = len(cepstra)
-        # get number of features in loaded cepstra
-        num_features_gen = (cepstrum.shape[1] for cepstrum in cepstra)
-        if check_equal(num_features_gen):
-            self.num_features = cepstra[0].shape[1]
-        else:
-            raise ValueError("The number of features is not identical in all loaded cepstrum files.")
-        # get number of time frames of the longest cepstrum
-        self.min_time, self.max_time = (min(cepstrum.shape[0] for cepstrum in cepstra),
-                                        max(cepstrum.shape[0] for cepstrum in cepstra))
-
         with self.graph.as_default():
-            with tf.name_scope('input_pipeline'):
-                # create tf Dataset objects from the training and testing data
-                data_types = (tf.float32, tf.int32)
-                data_shapes = (tf.TensorShape([None, self.num_features]), tf.TensorShape([None]))
+            with tf.name_scope('load_data'):
 
-                ds = tf.data.Dataset.from_generator(lambda: zip(cepstra, labels), data_types, data_shapes)
+                # TODO: when using input_format == "tfrecord", define num_data, num_features, min_time and max_time
+                # temporary hack for testing
+                self.num_data = 26804
+                self.num_features = 123
+                self.min_time = 100
+                self.max_time = 3000
+
+                if self.input_format == "numpy":
+                    cepstra, _ = load_cepstra(self.load_dir)
+                    labels, _ = load_labels(self.load_dir)
+
+                    # tests
+                    assert cepstra[0][0].dtype == np.float64, 'cepstra should be a list of lists with np arrays of dtype float64'
+                    assert labels[0][0].dtype == np.uint8, 'labels should be a list of lists with np arrays of dtype uint8'
+
+                    # flatten the lists to length (sum(n_files for n_files in subfolders))
+                    cepstra = [item for sublist in cepstra for item in sublist]
+                    labels = [item for sublist in labels for item in sublist]
+
+                    # get the total number of data loaded
+                    self.num_data = len(cepstra)
+                    # get number of features in loaded cepstra
+                    num_features_gen = (cepstrum.shape[1] for cepstrum in cepstra)
+                    if check_equal(num_features_gen):
+                        self.num_features = cepstra[0].shape[1]
+                    else:
+                        raise ValueError("The number of features is not identical in all loaded cepstrum files.")
+                    # get number of time frames of the longest cepstrum
+                    self.min_time, self.max_time = (min(cepstrum.shape[0] for cepstrum in cepstra),
+                                                    max(cepstrum.shape[0] for cepstrum in cepstra))
+
+
+                    # create tf Dataset objects from the training and testing data
+                    data_types = (tf.float32, tf.int64)
+                    data_shapes = (tf.TensorShape([None, self.num_features]), tf.TensorShape([None]))
+
+                    ds = tf.data.Dataset.from_generator(lambda: zip(cepstra, labels), data_types, data_shapes)
+                elif self.input_format == "tfrecord":
+
+                    # get list of all .tfrecord files in self.load_dir
+                    dir_files = os.listdir(self.load_dir)  # TODO: will not work for nested files
+                    tfrecord_files = [os.path.join(self.load_dir, f)
+                                      for f in dir_files if os.path.splitext(f)[1] == ".tfrecord"]
+
+                    # load tfrecord files into data.Dataset object ds
+                    ds = self.read_tfrecords(file_names=tfrecord_files)
+                else:
+                    raise ValueError("input_format must be eiher 'numpy' or 'tfrecord'")
 
                 ds = ds.shuffle(buffer_size=self.num_data,
                                 seed=self.shuffle_seed,
@@ -352,7 +392,10 @@ class AcousticModel(object):
         """
 
         with self.graph.as_default():
-            with tf.name_scope('input_pipeline'):
+            with tf.name_scope('prepare_data'):
+
+                # placeholder for choosing train/test iterator
+                ph_handle = tf.placeholder(tf.string, shape=[], name="ph_handle")
 
                 # combine the elements in datasets into batches of padded components
                 bucket_boundaries = list(range(self.min_time, self.max_time + 1, self.bucket_width))
@@ -363,7 +406,7 @@ class AcousticModel(object):
                                  tf.TensorShape([]),  # sizes not padded
                                  tf.TensorShape([]))  # sizes not padded
                 padding_values = (tf.constant(self.cepstrum_pad_val, dtype=tf.float32),  # cepstra padded with 0.0
-                                  tf.constant(self.label_pad_val, dtype=tf.int32),  # labels padded with -1
+                                  tf.constant(self.label_pad_val, dtype=tf.int64),  # labels padded with -1
                                   0,  # size(cepstrum) -- unused
                                   0)  # size(label) -- unused
 
@@ -389,28 +432,37 @@ class AcousticModel(object):
                 self.num_test_batches = (np.ceil(self.num_data*(1 - self.tt_ratio)/self.batch_size)
                                          + num_buckets).astype(np.int32)
 
-                # shuffle the batches after bucketing
-                # TODO: test this out (we need to somehow get number of batches after bucketing)
+                # shuffle the training batches after bucketing
+                # TODO: Implement SortaGrad
                 ds_train = ds_train.shuffle(buffer_size=self.num_train_batches,
-                                            reshuffle_each_iteration=True).prefetch(1)
-                ds_test = ds_test.shuffle(buffer_size=self.num_test_batches,
-                                          reshuffle_each_iteration=True).prefetch(1)
+                                            reshuffle_each_iteration=True)
 
-                # make initialisable iterator over the dataset which will return the batches of (x, y, size_x, size_y)
-                iterator = tf.data.Iterator.from_structure(ds_train.output_types, ds_train.output_shapes)
+                # repeat the training set indefinitely
+                ds_train = ds_train.repeat()
+
+                # prefetch values for better producer/consumer overlap
+                ds_train = ds_train.prefetch(tf.contrib.data.AUTOTUNE)
+                ds_test = ds_test.prefetch(tf.contrib.data.AUTOTUNE)
+
+                # make iterator over the dataset which will return the batches of (x, y, size_x, size_y)
+                iterator = tf.data.Iterator.from_string_handle(ph_handle, ds_train.output_types, ds_train.output_shapes)
                 x, y, size_x, size_y = iterator.get_next()
 
                 # make initializers over the training and testing datasets
-                iterator_train_init = iterator.make_initializer(ds_train)
-                iterator_test_init = iterator.make_initializer(ds_test)
+                iterator_train = ds_train.make_one_shot_iterator()
+                iterator_test = ds_test.make_initializable_iterator()
+                init_test = iterator_test.initializer
+
+                # get handles for train and test iterators which can be fed to ph_handle
+                handle_train = iterator_train.string_handle(name="handle_train")
+                handle_test = iterator_test.string_handle(name="handle_test")
 
                 # Build instance dictionary with the iterator data and operations
                 self.inputs = {"x": x,
                                "y": y,
                                "size_x": size_x,
                                "size_y": size_y,
-                               "init_train": iterator_train_init,
-                               "init_test": iterator_test_init}
+                               "init_test": init_test}
 
     @staticmethod
     def batch_norm_layer(x, is_train, data_format, scope):
@@ -543,7 +595,6 @@ class AcousticModel(object):
             ph_dropout = tf.placeholder(tf.float32, [len(self.dropout_probs)], name="ph_dropout")
 
             batch_size = tf.shape(self.inputs["x"])[0]
-            print(batch_size)
 
             # Step tracking tensors and update ops
             self.global_step = tf.Variable(0, trainable=False, name='global_step', dtype=tf.int32)
@@ -656,7 +707,7 @@ class AcousticModel(object):
 
             # convert labels to sparse tensor
             with tf.name_scope("labels"):
-                labels = tf.contrib.layers.dense_to_sparse(ph_y, eos_token=self.label_pad_val)
+                labels = tf.contrib.layers.dense_to_sparse(tf.cast(ph_y, tf.int32), eos_token=self.label_pad_val)
 
             # calculate ctc loss of logits
             with tf.name_scope("ctc_loss"):
@@ -783,7 +834,6 @@ class AcousticModel(object):
 
         print("\n_____EPOCH %d" % epoch)
         # TRAINING Dataset
-        self.sess.run(self.inputs["init_train"])
         print("\n_____TRAINING DATA_____")
         train_tensors = [self.outputs["mean_loss"],
                          self.increment_total_loss,
@@ -805,24 +855,25 @@ class AcousticModel(object):
                 train_tensors.append(self.print_grad_norm_op)
             if self.print_labels:
                 train_tensors.append(self.print_labels_op)
-        try:
-            with tqdm(range(self.num_train_batches), unit="batch") as timer:
-                while True:
-                    _, batch_no = self.sess.run([self.increment_batch_no_op, self.batch_no])
-                    mean_loss, *_ = self.sess.run(train_tensors,
-                                                  feed_dict={"ph_is_train:0": True,
-                                                             "ph_dropout:0": self.dropout_probs})
-                    timer.update(1)
-                    if batch_no % 10 == 0:
-                        print("BATCH {} | Loss {}".format(batch_no, mean_loss))
-        except tf.errors.OutOfRangeError:
-            # update train summary (only with total loss)
-            summary, total_loss = self.sess.run([self.smr_total_loss, self.total_loss])
-            self.sw_train.add_summary(summary, epoch)
-            # print results to console
-            print("Total Loss: {}".format(total_loss))
-            # reset summary variables
-            self.sess.run([self.reset_total_loss, self.reset_batch_no])
+
+        with tqdm(range(self.num_train_batches), unit="batch") as timer:
+            for _ in range(self.num_train_batches):
+                _, batch_no = self.sess.run([self.increment_batch_no_op, self.batch_no])
+                mean_loss, *_ = self.sess.run(train_tensors,
+                                              feed_dict={"prepare_data/ph_handle:0": self.handle_train,
+                                                         "ph_is_train:0": True,
+                                                         "ph_dropout:0": self.dropout_probs})
+                timer.update(1)
+                if batch_no % 10 == 0:
+                    print("BATCH {} | Loss {}".format(batch_no, mean_loss))
+
+        # update train summary (only with total loss)
+        summary, total_loss = self.sess.run([self.smr_total_loss, self.total_loss])
+        self.sw_train.add_summary(summary, epoch)
+        # print results to console
+        print("Total Loss: {}".format(total_loss))
+        # reset summary variables
+        self.sess.run([self.reset_total_loss, self.reset_batch_no])
 
         # TESTING Dataset
         self.sess.run(self.inputs["init_test"])
@@ -850,7 +901,8 @@ class AcousticModel(object):
                 while True:
                     _, batch_no = self.sess.run([self.increment_batch_no_op, self.batch_no])
                     mean_loss, output, mean_cer, *_ = self.sess.run(test_tensors,
-                                                                    feed_dict={"ph_is_train:0": False,
+                                                                    feed_dict={"prepare_data/ph_handle:0": self.handle_test,
+                                                                               "ph_is_train:0": False,
                                                                                "ph_dropout:0": [0.0, 0.0, 0.0]})
                     timer.update(1)
                     if batch_no % 5 == 0:

@@ -8,6 +8,7 @@ from models.AcousticModel import AcousticModel
 # __ DS2: https://arxiv.org/pdf/1512.02595.pdf __
 # GRU or even simple RNN instead of LSTM
 # 1D or 2D convolution as the first layer (with stride > 1 for reducing sequence length for RNN)
+# TODO: Implement SortaGrad
 # TODO: RNN batch normalisation
 # TODO: connecting labels to bigrams (increasing vocab size but reducing transcript length allowing bigger cnn stride)
 
