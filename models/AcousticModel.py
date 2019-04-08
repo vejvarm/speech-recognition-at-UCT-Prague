@@ -44,6 +44,11 @@ class AcousticModel(object):
     outputs: Dict[str, Union[tf.Tensor, tf.Operation]]
     global_step: tf.Tensor
     increment_global_step_op: tf.Operation
+    feature_type: str
+    feature_energy: bool
+    feature_deltas: Tuple[int]
+    label_type: str
+    bigrams_repeated: bool
     lr: float
     max_epochs: int
     batch_size: int
@@ -80,9 +85,6 @@ class AcousticModel(object):
     optimizer_choice: str
     grad_clip: Union[str, bool]
     grad_clip_val: float
-    feature_type: str
-    feature_energy: bool
-    feature_deltas: Tuple[int]
     show_device_placement: bool
     print_batch_x: bool
     print_conv: bool
@@ -158,11 +160,28 @@ class AcousticModel(object):
         self.reset_batch_no = None  # operation for resetting the batch number
 
         # HyperParameters (HP) #
-        # size of the alphabet in DataLoader
-        self.alphabet_size = len(DataLoader.c2n_map)  # number of characters in the alphabet of transcripts
         if config['random']:  # TODO: The missing (None) params will be configured randomly
             pass  # TODO: random_config() for generating random configurations of the hyperparams
         else:
+            # general HP
+            self.feature_type = self.config['feature_type']      # (str) type of features for inference (MFCC or MFSC)
+            self.feature_energy = self.config['feature_energy']  # (bool) whether to add energy feature
+            self.feature_deltas = self.config['feature_deltas']  # (Tuple[int]) use of delta coeffs in inference feats
+            self.label_type = self.config['label_type']          # (str) "unigram" or "bigram"
+            self.bigrams_repeated = self.config['bigrams_repeated']  # (bool) if True, bigrams contain repeated chars
+
+            # number of characters in the alphabet of transcripts
+            if self.label_type == "unigram":
+                self.c2n_map = DataLoader.c2n_map
+                self.n2c_map = DataLoader.n2c_map
+                self.alphabet_size = len(self.c2n_map)
+            elif self.label_type == "bigram":
+                self.c2n_map = DataLoader.calc_bigram_map(DataLoader.c2n_map, self.bigrams_repeated)
+                self.n2c_map = DataLoader.calc_bigram_map(DataLoader.n2c_map, self.bigrams_repeated)
+                self.alphabet_size = len(self.c2n_map)
+            else:
+                raise ValueError("config['label_type'] must be 'unigram' or 'bigram'")
+
             # training HP
             self.max_epochs = self.config['max_epochs']  # (int) maximum number of training epochs
             self.batch_size = self.config['batch_size']  # (int) size of mini-batches during learning from epoch
@@ -216,11 +235,6 @@ class AcousticModel(object):
             self.epsilon = self.config['epsilon']  # (float) a small constant for numerical stability
             self.grad_clip = self.config['grad_clip']  # (str|bool) method to be used (False for no clipping)
             self.grad_clip_val = self.config['grad_clip_val']  # (float) value at which to clip gradient
-
-            # inference HP
-            self.feature_type = self.config['feature_type']      # (str) type of features for inference (MFCC or MFSC)
-            self.feature_energy = self.config['feature_energy']  # (bool) whether to add energy feature
-            self.feature_deltas = self.config['feature_deltas']  # (Tuple[int]) use of delta coeffs in inference feats
 
         # DEBUGGING SETTINGS # (works only if config["debug"] == True)
         self.show_device_placement = self.config['show_device_placement']
@@ -329,7 +343,7 @@ class AcousticModel(object):
 
                     # tests
                     assert cepstra[0][0].dtype == np.float64, 'cepstra should be a list of lists with np arrays of dtype float64'
-                    assert labels[0][0].dtype == np.uint8, 'labels should be a list of lists with np arrays of dtype uint8'
+                    assert labels[0][0].dtype == np.int32, 'labels should be a list of lists with np arrays of dtype int32'
 
                     # flatten the lists to length (sum(n_files for n_files in subfolders))
                     cepstra = [item for sublist in cepstra for item in sublist]
@@ -801,7 +815,7 @@ class AcousticModel(object):
                                                      output_stream=sys.stdout)
                 if self.print_conv:
                     self.print_conv_op = tf.print("conv_layer: ", conv_layer, "shape: ", conv_layer.shape,
-                                                     output_stream=sys.stdout)
+                                                  output_stream=sys.stdout)
                 if self.print_dropout:
                     self.print_dropout_op = tf.print("dropout: ", ph_dropout,
                                                      "shape: ", ph_dropout.shape,
@@ -916,7 +930,7 @@ class AcousticModel(object):
             # print results to console
             print("Total Loss: {}".format(total_loss))
             print("Mean CER: {}".format(epoch_mean_cer))
-            print("Output Example: {}".format("".join([DataLoader.n2c_map[c] for c in output[0][0, :] if c != -1])))
+            print("Output Example: {}".format("".join([self.n2c_map[c] for c in output[0][0, :] if c != -1])))
             # reset summary variables
             self.sess.run([self.reset_total_loss, self.reset_batch_no])
 
@@ -959,7 +973,7 @@ class AcousticModel(object):
                                           "ph_is_train:0": False,
                                           "ph_dropout:0": [0.0, 0.0, 0.0]})
 
-        print("\n_____TRANSCRIPT_____:\n{}".format("".join([DataLoader.n2c_map[c] for c in output[0][0, :] if c != -1])))
+        print("\n_____TRANSCRIPT_____:\n{}".format("".join([self.n2c_map[c] for c in output[0][0, :] if c != -1])))
 
     def save(self):
         # This function is usually common to all your models, Here is an example:

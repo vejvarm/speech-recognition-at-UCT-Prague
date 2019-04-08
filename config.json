@@ -2,7 +2,7 @@
   "best": false,
   "debug": false,
   "input_format": "numpy",
-  "load_dir": "C:/!temp/MFSC_small",
+  "load_dir": "C:/!temp/MFSC_bigram_debug",
   "save_dir": "./data/results/",
   "do_train": true,
   "from_checkpoint": false,
@@ -16,12 +16,15 @@
   "feature_type": "MFSC",
   "feature_energy": true,
   "feature_deltas": [2, 2],
-  "max_epochs": 1000,
+  "label_type": "bigram",
+  "bigrams_repeated": true,
+
+  "max_epochs": 100,
   "batch_size": 8,
-  "tt_ratio": 0.90,
+  "tt_ratio": 0.9,
   "shuffle_seed": 42,
 
-  "bucket_width": 10,
+  "bucket_width": 100,
 
   "decay_by_epochs": true,
   "decay_by_length": false,
@@ -60,7 +63,7 @@
   "top_paths": 1,
 
   "optimizer_choice": "amsgrad",
-  "lr": 1.0,
+  "lr": 0.1,
   "epsilon": 0.1,
   "grad_clip": "global_norm",
   "grad_clip_val": 400,

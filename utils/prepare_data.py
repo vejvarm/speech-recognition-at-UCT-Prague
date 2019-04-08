@@ -27,13 +27,14 @@ def get_file_names(files):
     return [os.path.splitext(os.path.split(file[0])[1])[0] for file in files]
 
 
-def prepare_data(files, save_folder, feature_type="MFSC", energy=True, deltas=(0, 0), nbanks=40, filter_nan=True, sort=True):
+def prepare_data(files, save_folder, feature_type="MFSC", bigrams=False, repeated=False,
+                 energy=True, deltas=(0, 0), nbanks=40, filter_nan=True, sort=True):
     cepstra_length_list = []
 
     file_names = get_file_names(files)
 
     for i, file in enumerate(files):
-        pdtsc = PDTSCLoader([file[0]], [file[1]])
+        pdtsc = PDTSCLoader([file[0]], [file[1]], bigrams, repeated)
         labels = pdtsc.transcripts_to_labels()  # list of lists of 1D numpy arrays
         labels = labels[0]  # flatten label list
         audio, fs = pdtsc.load_audio()
@@ -101,11 +102,15 @@ def prepare_data(files, save_folder, feature_type="MFSC", energy=True, deltas=(0
 if __name__ == '__main__':
     # extracting audiofiles, transforming into cepstra and saving to separate folders
     feature_type = "MFSC"
+    label_type = "bigram"
+
+    bigrams = True if label_type == "bigram" else False
 
     audio_folder = "C:/!temp/raw_debug/audio/"
     transcript_folder = "C:/!temp/raw_debug/transcripts/"
-    save_folder = 'C:/!temp/{}_debug/'.format(feature_type)
+    save_folder = 'C:/!temp/{}_{}_debug/'.format(feature_type, label_type)
 
     files = get_file_paths(audio_folder, transcript_folder)
 
-    prepare_data(files, save_folder, feature_type="MFSC", energy=True, deltas=(2, 2), nbanks=40, filter_nan=True)
+    prepare_data(files, save_folder, feature_type="MFSC", bigrams=bigrams, repeated=True,
+                 energy=True, deltas=(2, 2), nbanks=40, filter_nan=True)

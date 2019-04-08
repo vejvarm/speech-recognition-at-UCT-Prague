@@ -29,9 +29,13 @@ from models.AcousticModel import AcousticModel
 if __name__ == '__main__':
     config_path = "./config.json"
     audiofile = "./data/dobry_den.wav"
-    ac_model = AcousticModel(config_path)
+    num_repeats = 1
 
-    ac_model.train(save_every=1)
-    # t = time.time()
-    # ac_model.infer(audiofile)
-    # print(time.time() - t)
+    for _ in range(num_repeats):
+        ac_model = AcousticModel(config_path)
+
+        ac_model.train(save_every=1)
+        # t = time.time()
+        # ac_model.infer(audiofile)
+        # print(time.time() - t)
+
