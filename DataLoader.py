@@ -153,9 +153,9 @@ class DataLoader:
     @staticmethod
     def tokens_to_bigrams(tokens):
         bigram_list = []
-        for idx in range(len(tokens)):
+        for token in tokens:
             bigrams = []
-            for word in tokens[idx].split(' '):
+            for word in token.split(' '):
                 # temporarily replace 'ch' with '*' so that it counts as one character
                 word = re.sub('ch', '*', word)
                 word_len = len(word)
@@ -245,7 +245,7 @@ class PDTSCLoader(DataLoader):
             token_tags = [LM.find_all('token') for LM in lm_tags]
 
             # process the tokens from token tags
-            regexp = r'[^A-Za-záéíóúýčďěňřšťůž{ch}]+'  # find all non alphabetic characters (Czech alphabet)
+            regexp = r'[^A-Za-záéíóúýčďěňřšťůž]+'  # find all non alphabetic characters (Czech alphabet)
             tokens = [' '.join([re.sub(regexp, '', token.text.lower()) for token in tokens])
                       for tokens in token_tags]  # joining sentences and removing special and numeric chars
 
