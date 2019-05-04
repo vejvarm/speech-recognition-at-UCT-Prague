@@ -135,6 +135,7 @@ class AcousticModel(object):
         self.parallel_iterations = self.config['parallel_iterations']  # GPU parallelization in stacked_dynamic_BiRNN
         self.cepstrum_pad_val = self.config['cepstrum_pad_val']  # value with which to pad cepstra to same length
         self.label_pad_val = self.config['label_pad_val']  # value to pad batches of labels to same length
+        self.devices = get_available_devices()
         self.init_op = None
 
         # Data-inferred parameters (check load_data())#
@@ -327,70 +328,72 @@ class AcousticModel(object):
         :return :ivar self.ds_train, :ivar self.ds_test
 
         """
+
         with self.graph.as_default():
-            with tf.name_scope('load_data'):
+            with tf.device(self.devices['cpu'][0]):
+                with tf.name_scope('load_data'):
 
-                # TODO: when using input_format == "tfrecord", define num_data, num_features, min_time and max_time
-                # temporary hack for testing
-                self.num_data = 26804
-                self.num_features = 123
-                self.min_time = 100
-                self.max_time = 3000
+                    # TODO: when using input_format == "tfrecord", define num_data, num_features, min_time and max_time
+                    # temporary hack for testing
+                    self.num_data = 26804
+                    self.num_features = 39 if self.feature_type == "MFCC" else 123
+                    self.min_time = 100
+                    self.max_time = 3000
 
-                if self.input_format == "numpy":
-                    cepstra, _ = load_cepstra(self.load_dir)
-                    labels, _ = load_labels(self.load_dir)
+                    if self.input_format == "numpy":
+                        cepstra, _ = load_cepstra(self.load_dir)
+                        labels, _ = load_labels(self.load_dir)
 
-                    # tests
-                    assert cepstra[0][0].dtype == np.float64, 'cepstra should be a list of lists with np arrays of dtype float64'
-                    assert labels[0][0].dtype == np.int32, 'labels should be a list of lists with np arrays of dtype int32'
+                        # tests
+                        assert cepstra[0][0].dtype == np.float64, 'cepstra should be a list of lists with np arrays of dtype float64'
+                        assert labels[0][0].dtype == np.int32, 'labels should be a list of lists with np arrays of dtype int32'
 
-                    # flatten the lists to length (sum(n_files for n_files in subfolders))
-                    cepstra = [item for sublist in cepstra for item in sublist]
-                    labels = [item for sublist in labels for item in sublist]
+                        # flatten the lists to length (sum(n_files for n_files in subfolders))
+                        cepstra = [item for sublist in cepstra for item in sublist]
+                        labels = [item for sublist in labels for item in sublist]
 
-                    # get the total number of data loaded
-                    self.num_data = len(cepstra)
-                    # get number of features in loaded cepstra
-                    num_features_gen = (cepstrum.shape[1] for cepstrum in cepstra)
-                    if check_equal(num_features_gen):
-                        self.num_features = cepstra[0].shape[1]
+                        # get the total number of data loaded
+                        self.num_data = len(cepstra)
+                        # get number of features in loaded cepstra
+                        num_features_gen = (cepstrum.shape[1] for cepstrum in cepstra)
+                        if check_equal(num_features_gen):
+                            self.num_features = cepstra[0].shape[1]
+                        else:
+                            raise ValueError("The number of features is not identical in all loaded cepstrum files.")
+                        # get number of time frames of the longest cepstrum
+                        self.min_time, self.max_time = (min(cepstrum.shape[0] for cepstrum in cepstra),
+                                                        max(cepstrum.shape[0] for cepstrum in cepstra))
+
+
+                        # create tf Dataset objects from the training and testing data
+                        data_types = (tf.float32, tf.int64)
+                        data_shapes = (tf.TensorShape([None, self.num_features]), tf.TensorShape([None]))
+
+                        ds = tf.data.Dataset.from_generator(lambda: zip(cepstra, labels), data_types, data_shapes)
+                    elif self.input_format == "tfrecord":
+
+                        # get list of all .tfrecord files in self.load_dir
+                        dir_files = os.listdir(self.load_dir)  # TODO: will not work for nested files
+                        tfrecord_files = [os.path.join(self.load_dir, f)
+                                          for f in dir_files if os.path.splitext(f)[1] == ".tfrecord"]
+
+                        # load tfrecord files into data.Dataset object ds
+                        ds = self.read_tfrecords(file_names=tfrecord_files)
                     else:
-                        raise ValueError("The number of features is not identical in all loaded cepstrum files.")
-                    # get number of time frames of the longest cepstrum
-                    self.min_time, self.max_time = (min(cepstrum.shape[0] for cepstrum in cepstra),
-                                                    max(cepstrum.shape[0] for cepstrum in cepstra))
+                        raise ValueError("input_format must be eiher 'numpy' or 'tfrecord'")
 
+                    ds = ds.shuffle(buffer_size=self.num_data,
+                                    seed=self.shuffle_seed,
+                                    reshuffle_each_iteration=False)
 
-                    # create tf Dataset objects from the training and testing data
-                    data_types = (tf.float32, tf.int64)
-                    data_shapes = (tf.TensorShape([None, self.num_features]), tf.TensorShape([None]))
+                    ds = ds.map(lambda x, y: (x, y, tf.shape(x)[0], tf.size(y)),
+                                num_parallel_calls=self.num_cpu_cores)
 
-                    ds = tf.data.Dataset.from_generator(lambda: zip(cepstra, labels), data_types, data_shapes)
-                elif self.input_format == "tfrecord":
+                    # split into training and testing dataset
+                    len_train = int(self.num_data*self.tt_ratio)
 
-                    # get list of all .tfrecord files in self.load_dir
-                    dir_files = os.listdir(self.load_dir)  # TODO: will not work for nested files
-                    tfrecord_files = [os.path.join(self.load_dir, f)
-                                      for f in dir_files if os.path.splitext(f)[1] == ".tfrecord"]
-
-                    # load tfrecord files into data.Dataset object ds
-                    ds = self.read_tfrecords(file_names=tfrecord_files)
-                else:
-                    raise ValueError("input_format must be eiher 'numpy' or 'tfrecord'")
-
-                ds = ds.shuffle(buffer_size=self.num_data,
-                                seed=self.shuffle_seed,
-                                reshuffle_each_iteration=False)
-
-                ds = ds.map(lambda x, y: (x, y, tf.shape(x)[0], tf.size(y)),
-                            num_parallel_calls=self.num_cpu_cores)
-
-                # split into training and testing dataset
-                len_train = int(self.num_data*self.tt_ratio)
-
-                self.ds_train = ds.take(len_train)
-                self.ds_test = ds.skip(len_train)
+                    self.ds_train = ds.take(len_train)
+                    self.ds_test = ds.skip(len_train)
 
     @staticmethod
     def elem_length_fn(x, y, size_x, size_y):
@@ -406,77 +409,78 @@ class AcousticModel(object):
         """
 
         with self.graph.as_default():
-            with tf.name_scope('prepare_data'):
+            with tf.device(self.devices['cpu'][0]):
+                with tf.name_scope('prepare_data'):
 
-                # placeholder for choosing train/test iterator
-                ph_handle = tf.placeholder(tf.string, shape=[], name="ph_handle")
+                    # placeholder for choosing train/test iterator
+                    ph_handle = tf.placeholder(tf.string, shape=[], name="ph_handle")
 
-                # combine the elements in datasets into batches of padded components
-                bucket_boundaries = list(range(self.min_time, self.max_time + 1, self.bucket_width))
-                num_buckets = len(bucket_boundaries)+1
-                bucket_batch_sizes = [self.batch_size]*num_buckets
-                padded_shapes = (tf.TensorShape([None, self.num_features]),  # cepstra padded to maximum time in batch
-                                 tf.TensorShape([None]),  # labels padded to maximum length in batch
-                                 tf.TensorShape([]),  # sizes not padded
-                                 tf.TensorShape([]))  # sizes not padded
-                padding_values = (tf.constant(self.cepstrum_pad_val, dtype=tf.float32),  # cepstra padded with 0.0
-                                  tf.constant(self.label_pad_val, dtype=tf.int64),  # labels padded with -1
-                                  0,  # size(cepstrum) -- unused
-                                  0)  # size(label) -- unused
+                    # combine the elements in datasets into batches of padded components
+                    bucket_boundaries = list(range(self.min_time, self.max_time + 1, self.bucket_width))
+                    num_buckets = len(bucket_boundaries)+1
+                    bucket_batch_sizes = [self.batch_size]*num_buckets
+                    padded_shapes = (tf.TensorShape([None, self.num_features]),  # cepstra padded to maximum time in batch
+                                     tf.TensorShape([None]),  # labels padded to maximum length in batch
+                                     tf.TensorShape([]),  # sizes not padded
+                                     tf.TensorShape([]))  # sizes not padded
+                    padding_values = (tf.constant(self.cepstrum_pad_val, dtype=tf.float32),  # cepstra padded with 0.0
+                                      tf.constant(self.label_pad_val, dtype=tf.int64),  # labels padded with -1
+                                      0,  # size(cepstrum) -- unused
+                                      0)  # size(label) -- unused
 
-                bucket_transformation = tf.data.experimental.bucket_by_sequence_length(
-                    element_length_func=self.elem_length_fn,
-                    bucket_boundaries=bucket_boundaries,
-                    bucket_batch_sizes=bucket_batch_sizes,
-                    padded_shapes=padded_shapes,
-                    padding_values=padding_values
-                )
+                    bucket_transformation = tf.data.experimental.bucket_by_sequence_length(
+                        element_length_func=self.elem_length_fn,
+                        bucket_boundaries=bucket_boundaries,
+                        bucket_batch_sizes=bucket_batch_sizes,
+                        padded_shapes=padded_shapes,
+                        padding_values=padding_values
+                    )
 
-                ds_train = self.ds_train.apply(bucket_transformation)
-                ds_test = self.ds_test.apply(bucket_transformation)
+                    ds_train = self.ds_train.apply(bucket_transformation)
+                    ds_test = self.ds_test.apply(bucket_transformation)
 
-                # ds_train = self.ds_train.padded_batch(self.batch_size, padded_shapes, padding_values,
-                #                                       drop_remainder=False)
-                # ds_test = self.ds_test.padded_batch(self.batch_size, padded_shapes, padding_values,
-                #                                     drop_remainder=False)
+                    # ds_train = self.ds_train.padded_batch(self.batch_size, padded_shapes, padding_values,
+                    #                                       drop_remainder=False)
+                    # ds_test = self.ds_test.padded_batch(self.batch_size, padded_shapes, padding_values,
+                    #                                     drop_remainder=False)
 
-                # calculate maximum number of batches
-                self.num_train_batches = (np.ceil(self.num_data*self.tt_ratio/self.batch_size)
-                                          + num_buckets).astype(np.int32)
-                self.num_test_batches = (np.ceil(self.num_data*(1 - self.tt_ratio)/self.batch_size)
-                                         + num_buckets).astype(np.int32)
+                    # calculate maximum number of batches
+                    self.num_train_batches = (np.ceil(self.num_data*self.tt_ratio/self.batch_size)
+                                              + num_buckets).astype(np.int32)
+                    self.num_test_batches = (np.ceil(self.num_data*(1 - self.tt_ratio)/self.batch_size)
+                                             + num_buckets).astype(np.int32)
 
-                # shuffle the training batches after bucketing
-                # TODO: Implement SortaGrad
-                ds_train = ds_train.shuffle(buffer_size=self.num_train_batches,
-                                            reshuffle_each_iteration=True)
+                    # shuffle the training batches after bucketing
+                    # TODO: Implement SortaGrad
+                    ds_train = ds_train.shuffle(buffer_size=self.num_train_batches,
+                                                reshuffle_each_iteration=True)
 
-                # repeat the training set indefinitely
-                ds_train = ds_train.repeat()
+                    # repeat the training set indefinitely
+                    ds_train = ds_train.repeat()
 
-                # prefetch values for better producer/consumer overlap
-                ds_train = ds_train.prefetch(tf.contrib.data.AUTOTUNE)
-                ds_test = ds_test.prefetch(tf.contrib.data.AUTOTUNE)
+                    # prefetch values for better producer/consumer overlap
+                    ds_train = ds_train.prefetch(tf.contrib.data.AUTOTUNE)
+                    ds_test = ds_test.prefetch(tf.contrib.data.AUTOTUNE)
 
-                # make iterator over the dataset which will return the batches of (x, y, size_x, size_y)
-                iterator = tf.data.Iterator.from_string_handle(ph_handle, ds_train.output_types, ds_train.output_shapes)
-                x, y, size_x, size_y = iterator.get_next()
+                    # make iterator over the dataset which will return the batches of (x, y, size_x, size_y)
+                    iterator = tf.data.Iterator.from_string_handle(ph_handle, ds_train.output_types, ds_train.output_shapes)
+                    x, y, size_x, size_y = iterator.get_next()
 
-                # make initializers over the training and testing datasets
-                iterator_train = ds_train.make_one_shot_iterator()
-                iterator_test = ds_test.make_initializable_iterator()
-                init_test = iterator_test.initializer
+                    # make initializers over the training and testing datasets
+                    iterator_train = ds_train.make_one_shot_iterator()
+                    iterator_test = ds_test.make_initializable_iterator()
+                    init_test = iterator_test.initializer
 
-                # get handles for train and test iterators which can be fed to ph_handle
-                handle_train = iterator_train.string_handle(name="handle_train")
-                handle_test = iterator_test.string_handle(name="handle_test")
+                    # get handles for train and test iterators which can be fed to ph_handle
+                    handle_train = iterator_train.string_handle(name="handle_train")
+                    handle_test = iterator_test.string_handle(name="handle_test")
 
-                # Build instance dictionary with the iterator data and operations
-                self.inputs = {"x": x,
-                               "y": y,
-                               "size_x": size_x,
-                               "size_y": size_y,
-                               "init_test": init_test}
+                    # Build instance dictionary with the iterator data and operations
+                    self.inputs = {"x": x,
+                                   "y": y,
+                                   "size_x": size_x,
+                                   "size_y": size_y,
+                                   "init_test": init_test}
 
     @staticmethod
     def batch_norm_layer(x, is_train, data_format, scope):
@@ -491,7 +495,7 @@ class AcousticModel(object):
         return bn
 
     def conv_layer(self, x, filt_dims, stride, in_channels=1, out_channels=1, dilation=(1, 1), padding='SAME',
-                   data_format="NCHW", batch_norm=False, is_train=True, initializer=None,
+                   data_format="NHWC", batch_norm=False, is_train=True, initializer=None,
                    filt_name='filter', name='conv', scope='conv'):
         """
 
@@ -514,10 +518,8 @@ class AcousticModel(object):
         assert len(filt_dims) == 2, "filt_dims must be a list/tuple with 2 elements"
         assert len(stride) == 2, "stride must be a list/tuple with 2 elements"
 
-        strides = [1, 1]
-        dilations = [1, 1]
-        strides.extend(stride)
-        dilations.extend(dilation)
+        strides = [1, stride[0], stride[1], 1]
+        dilations = [1, dilation[0], dilation[1], 1]
 
         with tf.variable_scope(scope):
             if initializer:
@@ -596,128 +598,131 @@ class AcousticModel(object):
 
     def build_graph(self):
 
-        devices = get_available_devices()
         initializer = tf.contrib.layers.xavier_initializer()
 
         with self.graph.as_default():
 
-            # placeholders
-            ph_x = tf.placeholder_with_default(self.inputs["x"], (None, None, self.num_features), name="ph_x")
-            ph_size_x = tf.placeholder_with_default(self.inputs["size_x"], (None), name="ph_size_x")
-            ph_y = tf.placeholder_with_default(self.inputs["y"], (None, None), name="ph_y")
-            ph_is_train = tf.placeholder(tf.bool, name="ph_is_train")
-            ph_dropout = tf.placeholder(tf.float32, [len(self.dropout_probs)], name="ph_dropout")
+            with tf.device(self.devices['cpu'][0]):
+                # placeholders
+                ph_x = tf.placeholder_with_default(self.inputs["x"], (None, None, self.num_features), name="ph_x")
+                ph_size_x = tf.placeholder_with_default(self.inputs["size_x"], (None), name="ph_size_x")
+                ph_y = tf.placeholder_with_default(self.inputs["y"], (None, None), name="ph_y")
+                ph_is_train = tf.placeholder(tf.bool, name="ph_is_train")
+                ph_dropout = tf.placeholder(tf.float32, [len(self.dropout_probs)], name="ph_dropout")
 
-            batch_size = tf.shape(self.inputs["x"])[0]
+                batch_size = tf.shape(self.inputs["x"])[0]
 
-            # Step tracking tensors and update ops
-            self.global_step = tf.Variable(0, trainable=False, name='global_step', dtype=tf.int32)
-            self.batch_no = tf.Variable(0, trainable=False, name='batch_no', dtype=tf.int32)
-            self.increment_global_step_op = tf.assign_add(self.global_step, 1)
-            self.increment_batch_no_op = tf.assign_add(self.batch_no, 1)
-            self.reset_batch_no = tf.assign(self.batch_no, 0)
+                # Step tracking tensors and update ops
+                self.global_step = tf.Variable(0, trainable=False, name='global_step', dtype=tf.int32)
+                self.batch_no = tf.Variable(0, trainable=False, name='batch_no', dtype=tf.int32)
+                self.increment_global_step_op = tf.assign_add(self.global_step, 1)
+                self.increment_batch_no_op = tf.assign_add(self.batch_no, 1)
+                self.reset_batch_no = tf.assign(self.batch_no, 0)
 
-            # SUMMARY tensors
-            self.total_loss = tf.Variable(0, trainable=False, name='total_loss', dtype=tf.float32)
-            self.epoch_mean_cer = tf.Variable(0, trainable=False, name='epoch_mean_cer', dtype=tf.float32)
+                # SUMMARY tensors
+                self.total_loss = tf.Variable(0, trainable=False, name='total_loss', dtype=tf.float32)
+                self.epoch_mean_cer = tf.Variable(0, trainable=False, name='epoch_mean_cer', dtype=tf.float32)
 
             # reshaping from [batch_size, batch_time, num_features] to [batch_size*batch_time, num_features]
             # convolutional layers
-            with tf.variable_scope("conv_layers", initializer=initializer):
-                if self.conv_switch:
-                    assert len(self.conv_filter_dims) == len(self.conv_in_channels)
-                    assert len(self.conv_in_channels) == len(self.conv_out_channels)
-                    assert len(self.conv_out_channels) == len(self.conv_strides)
-                    assert len(self.conv_strides) == len(self.conv_dilations)
+            with tf.device(self.devices['gpu'][1]):
+                with tf.variable_scope("conv_layers", initializer=initializer):
+                    if self.conv_switch:
+                        assert len(self.conv_filter_dims) == len(self.conv_in_channels)
+                        assert len(self.conv_in_channels) == len(self.conv_out_channels)
+                        assert len(self.conv_out_channels) == len(self.conv_strides)
+                        assert len(self.conv_strides) == len(self.conv_dilations)
 
-                    # prepare params for stacked layers
-                    conv_params = list(zip(self.conv_filter_dims, self.conv_strides,
-                                           self.conv_in_channels, self.conv_out_channels,
-                                           self.conv_dilations))
-                    conv_size_params = list(zip([x[0] for x in self.conv_filter_dims],
-                                                [x[0] for x in self.conv_strides]))
+                        # prepare params for stacked layers
+                        conv_params = list(zip(self.conv_filter_dims, self.conv_strides,
+                                               self.conv_in_channels, self.conv_out_channels,
+                                               self.conv_dilations))
+                        conv_size_params = list(zip([x[0] for x in self.conv_filter_dims],
+                                                    [x[0] for x in self.conv_strides]))
 
-                    # reshape ph_x to [batch_size, 1, batch_time, num_features]
-                    batch_x = tf.reshape(ph_x, (batch_size, 1, -1, self.num_features))
+                        # reshape ph_x to [batch_size, 1, batch_time, num_features]
+                        batch_x = tf.reshape(ph_x, (batch_size, -1, self.num_features, 1))
 
-                    conv_layer = tf.contrib.layers.stack(batch_x,
-                                                         self.conv_layer,
-                                                         conv_params,
-                                                         padding=self.conv_padding,
-                                                         batch_norm=self.conv_batch_norm,
-                                                         is_train=ph_is_train,
-                                                         initializer=initializer,
-                                                         scope='conv')
+                        conv_layer = tf.contrib.layers.stack(batch_x,
+                                                             self.conv_layer,
+                                                             conv_params,
+                                                             padding=self.conv_padding,
+                                                             batch_norm=self.conv_batch_norm,
+                                                             is_train=ph_is_train,
+                                                             initializer=initializer,
+                                                             scope='conv')
 
-                    # get the time dimension size after convolutions
-                    conv_output_size = tf.contrib.layers.stack(ph_size_x,
-                                                               self.conv_layer_output_size,
-                                                               conv_size_params,
-                                                               padding=self.conv_padding,
-                                                               scope='conv_size')
+                        # get the time dimension size after convolutions
+                        conv_output_size = tf.contrib.layers.stack(ph_size_x,
+                                                                   self.conv_layer_output_size,
+                                                                   conv_size_params,
+                                                                   padding=self.conv_padding,
+                                                                   scope='conv_size')
 
-                    # dropout after the last conv layer (after all batch normalization layers <- to avoid variance shift)
-                    conv_layer = tf.nn.dropout(conv_layer, keep_prob=(1.0 - ph_dropout[0]))
+                        # dropout after the last conv layer (after all batch normalization layers <- to avoid variance shift)
+                        conv_layer = tf.nn.dropout(conv_layer, keep_prob=(1.0 - ph_dropout[0]))
 
-                    # transpose dimensions to [batch_time, batch_size, num_features, out_channels]
-                    conv_layer = tf.transpose(conv_layer, [2, 0, 3, 1])
-                    # reshape to [batch_time, batch_size, num_features*out_channels]
-                    conv_layer = tf.reshape(conv_layer, (-1, batch_size, conv_layer.shape[2]*self.conv_out_channels[-1]))
-                else:
-                    # transpose to [batch_time, batch_size, num_features]
-                    conv_layer = tf.transpose(ph_x, [1, 0, 2])
-                    conv_output_size = ph_size_x
+                        # NHWC - [batch_size, batch_time, num_features, out_channels]
+                        # transpose dimensions to [batch_time, batch_size, num_features, out_channels]
+                        conv_layer = tf.transpose(conv_layer, [1, 0, 2, 3])
+                        # reshape to [batch_time, batch_size, num_features*out_channels]
+                        conv_layer = tf.reshape(conv_layer, (-1, batch_size, conv_layer.shape[2]*self.conv_out_channels[-1]))
+                    else:
+                        # transpose to [batch_time, batch_size, num_features]
+                        conv_layer = tf.transpose(ph_x, [1, 0, 2])
+                        conv_output_size = ph_size_x
 
             # 4th layer: stacked BiRNN with LSTM cells
-            with tf.variable_scope("layer_4", initializer=initializer) as scope:
-                with tf.name_scope("birnn"):
-                    cells_fw = [self.rnn_cell(n) for n in self.rnn_num_hidden]  # list of forward direction cells
-                    cells_bw = [self.rnn_cell(n) for n in self.rnn_num_hidden]  # list of backward direction cells
-#                    initial_states_fw = [tf.truncated_normal([batch_size, n], stddev=0.0001)
-#                                         for n in self.rnn_num_hidden]
-#                    initial_states_bw = [tf.truncated_normal([batch_size, n], stddev=0.0001)
-#                                         for n in self.rnn_num_hidden]
-#                    initial_states_fw = [rnn.LSTMStateTuple(tf.truncated_normal([batch_size, n], stddev=0.0001),
-#                                         tf.truncated_normal([batch_size, n], stddev=0.0001))
-#                                         for n in self.rnn_num_hidden]
-#                    initial_states_bw = [rnn.LSTMStateTuple(tf.truncated_normal([batch_size, n], stddev=0.0001),
-#                                         tf.truncated_normal([batch_size, n], stddev=0.0001))
-#                                         for n in self.rnn_num_hidden]
-                    rnn_outputs, _, _ = rnn.stack_bidirectional_dynamic_rnn(cells_fw,
-                                                                            cells_bw,
-                                                                            inputs=conv_layer,
-                                                                            # initial_states_fw=initial_states_fw,
-                                                                            # initial_states_bw=initial_states_bw,
-                                                                            dtype=tf.float32,
-                                                                            sequence_length=conv_output_size,
-                                                                            parallel_iterations=self.parallel_iterations,
-                                                                            time_major=True)
-                    # rnn_outputs: Tensor of shape [batch_time, batch_size, 2*num_hidden]
+            with tf.device(self.devices['gpu'][0]):
+                with tf.variable_scope("layer_4", initializer=initializer) as scope:
+                    with tf.name_scope("birnn"):
+                        cells_fw = [self.rnn_cell(n) for n in self.rnn_num_hidden]  # list of forward direction cells
+                        cells_bw = [self.rnn_cell(n) for n in self.rnn_num_hidden]  # list of backward direction cells
+    #                    initial_states_fw = [tf.truncated_normal([batch_size, n], stddev=0.0001)
+    #                                         for n in self.rnn_num_hidden]
+    #                    initial_states_bw = [tf.truncated_normal([batch_size, n], stddev=0.0001)
+    #                                         for n in self.rnn_num_hidden]
+    #                    initial_states_fw = [rnn.LSTMStateTuple(tf.truncated_normal([batch_size, n], stddev=0.0001),
+    #                                         tf.truncated_normal([batch_size, n], stddev=0.0001))
+    #                                         for n in self.rnn_num_hidden]
+    #                    initial_states_bw = [rnn.LSTMStateTuple(tf.truncated_normal([batch_size, n], stddev=0.0001),
+    #                                         tf.truncated_normal([batch_size, n], stddev=0.0001))
+    #                                         for n in self.rnn_num_hidden]
+                        rnn_outputs, _, _ = rnn.stack_bidirectional_dynamic_rnn(cells_fw,
+                                                                                cells_bw,
+                                                                                inputs=conv_layer,
+                                                                                # initial_states_fw=initial_states_fw,
+                                                                                # initial_states_bw=initial_states_bw,
+                                                                                dtype=tf.float32,
+                                                                                sequence_length=conv_output_size,
+                                                                                parallel_iterations=self.parallel_iterations,
+                                                                                time_major=True)
+                        # rnn_outputs: Tensor of shape [batch_time, batch_size, 2*num_hidden]
 
-                    # __ACTIVATION__ clipped *ELU activation to the rnn outputs
-                    rnn_outputs = tf.minimum(tf.nn.leaky_relu(rnn_outputs), self.relu_clip)
+                        # __ACTIVATION__ clipped *ELU activation to the rnn outputs
+                        rnn_outputs = tf.minimum(tf.nn.leaky_relu(rnn_outputs), self.relu_clip)
 
-                    # __DROPOUT__ after the RNN layer's nonlinearity (*ELU) function
-                    rnn_outputs = tf.nn.dropout(rnn_outputs, keep_prob=(1.0 - ph_dropout[1]))
+                        # __DROPOUT__ after the RNN layer's nonlinearity (*ELU) function
+                        rnn_outputs = tf.nn.dropout(rnn_outputs, keep_prob=(1.0 - ph_dropout[1]))
 
-                    # __RESHAPE__ [batch_time, batch_size, 2*num_hidden] -> [batch_time*batch_size, 2*num_hidden]
-                    rnn_outputs = tf.reshape(rnn_outputs, [-1, 2*self.rnn_num_hidden[-1]])
+                        # __RESHAPE__ [batch_time, batch_size, 2*num_hidden] -> [batch_time*batch_size, 2*num_hidden]
+                        rnn_outputs = tf.reshape(rnn_outputs, [-1, 2*self.rnn_num_hidden[-1]])
 
-            # 5th layer: linear projection of outputs from BiRNN
-            with tf.variable_scope("fc_logits", initializer=initializer):
-                # define weights and biases for linear projection of outputs from BiRNN
-                logit_size = self.alphabet_size + 1  # +1 for the blank
-                w5, b5 = self.ff_layer("w5", "b5", 2*self.rnn_num_hidden[-1], logit_size)
+                # 5th layer: linear projection of outputs from BiRNN
+                with tf.variable_scope("fc_logits", initializer=initializer):
+                    # define weights and biases for linear projection of outputs from BiRNN
+                    logit_size = self.alphabet_size + 1  # +1 for the blank
+                    w5, b5 = self.ff_layer("w5", "b5", 2*self.rnn_num_hidden[-1], logit_size)
 
-                # convert rnn_outputs into logits (apply linear projection of rnn outputs)
-                # lp_outputs.shape == [batch_time*batch_size, alphabet_size + 1]
-                lp_outputs = tf.add(tf.matmul(rnn_outputs, w5), b5)
+                    # convert rnn_outputs into logits (apply linear projection of rnn outputs)
+                    # lp_outputs.shape == [batch_time*batch_size, alphabet_size + 1]
+                    lp_outputs = tf.add(tf.matmul(rnn_outputs, w5), b5)
 
-                # __RESHAPE__ lp_outputs to shape [batch_time, batch_size, alphabet_size + 1]
-                logits = tf.reshape(lp_outputs, [-1, batch_size, logit_size])
+                    # __RESHAPE__ lp_outputs to shape [batch_time, batch_size, alphabet_size + 1]
+                    logits = tf.reshape(lp_outputs, [-1, batch_size, logit_size])
 
-                # __DROPOUT__ before softmax layer
-                logits = tf.nn.dropout(logits, keep_prob=(1.0 - ph_dropout[2]))
+                    # __DROPOUT__ before softmax layer
+                    logits = tf.nn.dropout(logits, keep_prob=(1.0 - ph_dropout[2]))
 
             # convert labels to sparse tensor
             with tf.name_scope("labels"):
@@ -742,104 +747,106 @@ class AcousticModel(object):
             # operation for updating variables in batch normalisation layers during training
             update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
 
-            # learning rate decay
-            with tf.name_scope("train"):
-                lr = self.decaying_learning_rate(size_x=conv_output_size)
+            with tf.device(self.devices['gpu'][0]):
+                # learning rate decay
+                with tf.name_scope("train"):
+                    lr = self.decaying_learning_rate(size_x=conv_output_size)
 
-                # use AdamOptimizer to compute the gradients and minimize the average of ctc_loss (training the model)
-                optimizer = self.optimizer_fun(learning_rate=lr, epsilon=self.epsilon)
+                    # use AdamOptimizer to compute the gradients and minimize the average of ctc_loss (training the model)
+                    optimizer = self.optimizer_fun(learning_rate=lr, epsilon=self.epsilon)
 
-                gradients, variables = zip(*optimizer.compute_gradients(mean_loss))
-                # Gradient clipping
-                if self.grad_clip == "global_norm":
-                    gradients, global_norm = tf.clip_by_global_norm(gradients, self.grad_clip_val)
-                elif self.grad_clip == "local_norm":
-                    gradients = [None if gradient is None else tf.clip_by_norm(gradient, self.grad_clip_val)
-                                 for gradient in gradients]
-                    global_norm = tf.global_norm(gradients)
-                else:
-                    global_norm = tf.global_norm(gradients)
-                # update_ops needs to be called for proper update of the trainable variables in batch normalization layers
-                with tf.control_dependencies(update_ops):
-                    optimize = optimizer.apply_gradients(zip(gradients, variables))
+                    gradients, variables = zip(*optimizer.compute_gradients(mean_loss))
+                    # Gradient clipping
+                    if self.grad_clip == "global_norm":
+                        gradients, global_norm = tf.clip_by_global_norm(gradients, self.grad_clip_val)
+                    elif self.grad_clip == "local_norm":
+                        gradients = [None if gradient is None else tf.clip_by_norm(gradient, self.grad_clip_val)
+                                     for gradient in gradients]
+                        global_norm = tf.global_norm(gradients)
+                    else:
+                        global_norm = tf.global_norm(gradients)
+                    # update_ops needs to be called for proper update of the trainable variables in batch normalization layers
+                    with tf.control_dependencies(update_ops):
+                        optimize = optimizer.apply_gradients(zip(gradients, variables))
 
-            # decode the logits
-            with tf.name_scope("outputs"):
-                ctc_outputs, ctc_log_probs = tf.nn.ctc_beam_search_decoder(inputs=logits,
-                                                                           sequence_length=conv_output_size,
-                                                                           beam_width=self.beam_width,
-                                                                           top_paths=self.top_paths,
-                                                                           merge_repeated=self.ctc_merge_repeated)
+            with tf.device(self.devices['cpu'][0]):
+                # decode the logits
+                with tf.name_scope("outputs"):
+                    ctc_outputs, ctc_log_probs = tf.nn.ctc_beam_search_decoder(inputs=logits,
+                                                                               sequence_length=conv_output_size,
+                                                                               beam_width=self.beam_width,
+                                                                               top_paths=self.top_paths,
+                                                                               merge_repeated=self.ctc_merge_repeated)
 
-                # cast ctc_outputs to int32
-                ctc_outputs = [tf.cast(output, tf.int32) for output in ctc_outputs]
+                    # cast ctc_outputs to int32
+                    ctc_outputs = [tf.cast(output, tf.int32) for output in ctc_outputs]
 
-                # convert outputs from sparse to dense
-                dense_outputs = [tf.sparse.to_dense(output, default_value=self.label_pad_val) for output in ctc_outputs]
+                    # convert outputs from sparse to dense
+                    dense_outputs = [tf.sparse.to_dense(output, default_value=self.label_pad_val) for output in ctc_outputs]
 
-            # calculate mean of character error rate (CER) using Levenshtein distance
-            with tf.name_scope("error_rate"):
-                mean_cer = tf.reduce_mean(tf.edit_distance(ctc_outputs[-1], labels, name="levenshtein_distance"))
+                # calculate mean of character error rate (CER) using Levenshtein distance
+                with tf.name_scope("error_rate"):
+                    mean_cer = tf.reduce_mean(tf.edit_distance(ctc_outputs[-1], labels, name="levenshtein_distance"))
 
-                bn_float = tf.cast(self.batch_no, tf.float32)
-                current_mean_cer = tf.divide(tf.add(tf.multiply(self.epoch_mean_cer,
-                                                                tf.subtract(bn_float, 1.0)),
-                                                    mean_cer),
-                                             bn_float)
+                    bn_float = tf.cast(self.batch_no, tf.float32)
+                    current_mean_cer = tf.divide(tf.add(tf.multiply(self.epoch_mean_cer,
+                                                                    tf.subtract(bn_float, 1.0)),
+                                                        mean_cer),
+                                                 bn_float)
 
-                self.update_epoch_mean_cer = tf.assign(self.epoch_mean_cer, current_mean_cer)
+                    self.update_epoch_mean_cer = tf.assign(self.epoch_mean_cer, current_mean_cer)
 
-            # add the tensors and ops to a collective dictionary
-            self.outputs = {"ctc_outputs": dense_outputs,
-                            "ctc_log_probs": ctc_log_probs,
-                            "ctc_loss": ctc_loss,
-                            "mean_loss": mean_loss,
-                            "mean_cer": mean_cer,
-                            "optimize": optimize}
+                # add the tensors and ops to a collective dictionary
+                self.outputs = {"ctc_outputs": dense_outputs,
+                                "ctc_log_probs": ctc_log_probs,
+                                "ctc_loss": ctc_loss,
+                                "mean_loss": mean_loss,
+                                "mean_cer": mean_cer,
+                                "optimize": optimize}
 
-            # initializer for TensorFlow variables
-            self.init_op = [tf.global_variables_initializer(),
-                            tf.local_variables_initializer()]
+                # initializer for TensorFlow variables
+                self.init_op = [tf.global_variables_initializer(),
+                                tf.local_variables_initializer()]
 
-            # SUMMARIES
-            with tf.name_scope("summaries"):
-                self.smr_total_loss = tf.summary.scalar('total_loss', self.total_loss)
-                self.smr_mean_cer = tf.summary.scalar('mean_cer', self.epoch_mean_cer)
+                # SUMMARIES
+                with tf.name_scope("summaries"):
+                    self.smr_total_loss = tf.summary.scalar('total_loss', self.total_loss)
+                    self.smr_mean_cer = tf.summary.scalar('mean_cer', self.epoch_mean_cer)
 
-                self.merged_summaries = tf.summary.merge_all()
+                    self.merged_summaries = tf.summary.merge_all()
 
-            # PRINT operations:
-            with tf.name_scope("prints"):
-                if self.print_batch_x:
-                    self.print_batch_x_op = tf.print("batch_x: ", batch_x, "shape: ", batch_x.shape,
-                                                     output_stream=sys.stdout)
-                if self.print_conv:
-                    self.print_conv_op = tf.print("conv_layer: ", conv_layer, "shape: ", conv_layer.shape,
-                                                  output_stream=sys.stdout)
-                if self.print_dropout:
-                    self.print_dropout_op = tf.print("dropout: ", ph_dropout,
-                                                     "shape: ", ph_dropout.shape,
-                                                     output_stream=sys.stdout)
-                if self.print_rnn_outputs:
-                    self.print_rnn_outputs_op = tf.print("rnn_outputs: ", rnn_outputs,
-                                                         "shape: ", rnn_outputs.shape,
+                # PRINT operations:
+                with tf.name_scope("prints"):
+                    if self.print_batch_x:
+                        self.print_batch_x_op = tf.print("batch_x: ", batch_x, "shape: ", batch_x.shape,
                                                          output_stream=sys.stdout)
-                if self.print_lr:
-                    self.print_lr_op = tf.print("learning rate: ", lr,
-                                                output_stream=sys.stdout)
-                if self.print_gradients:
-                    self.print_gradients_op = tf.print("gradients: ", gradients,
-                                                       "name: ", [variable.name for variable in variables],
-                                                       "shape: ", [gradient.shape for gradient in gradients],
-                                                       "maximum: ", ([tf.reduce_max(gradient) for gradient in gradients]),
-                                                       output_stream=sys.stdout)
-                if self.print_grad_norm:
-                    self.print_grad_norm_op = tf.print("Grad. global norm:", global_norm,
-                                                       output_stream=sys.stdout)
-                if self.print_labels:
-                    self.print_labels_op = tf.print("labels: ", ph_y,
-                                                    "shape: ", ph_y.shape,
+                    if self.print_conv:
+                        self.print_conv_op = tf.print("conv_layer: ", conv_layer, "shape: ", conv_layer.shape,
+                                                      output_stream=sys.stdout)
+                    if self.print_dropout:
+                        self.print_dropout_op = tf.print("dropout: ", ph_dropout,
+                                                         "shape: ", ph_dropout.shape,
+                                                         output_stream=sys.stdout)
+                    if self.print_rnn_outputs:
+                        self.print_rnn_outputs_op = tf.print("rnn_outputs: ", rnn_outputs,
+                                                             "shape: ", rnn_outputs.shape,
+                                                             output_stream=sys.stdout)
+                    if self.print_lr:
+                        self.print_lr_op = tf.print("learning rate: ", lr,
                                                     output_stream=sys.stdout)
+                    if self.print_gradients:
+                        self.print_gradients_op = tf.print("gradients: ", gradients,
+                                                           "name: ", [variable.name for variable in variables],
+                                                           "shape: ", [gradient.shape for gradient in gradients],
+                                                           "maximum: ", ([tf.reduce_max(gradient) for gradient in gradients]),
+                                                           output_stream=sys.stdout)
+                    if self.print_grad_norm:
+                        self.print_grad_norm_op = tf.print("Grad. global norm:", global_norm,
+                                                           output_stream=sys.stdout)
+                    if self.print_labels:
+                        self.print_labels_op = tf.print("labels: ", ph_y,
+                                                        "shape: ", ph_y.shape,
+                                                        output_stream=sys.stdout)
 
     def learn_from_epoch(self):
         output = None
@@ -960,7 +967,7 @@ class AcousticModel(object):
 
         # pad to max frame length and reshape into numpy array [1, max_time, num_features]
         try:
-            x = list_to_padded_array(cepstrum, size_x[0])  # TODO: save max time during training and load during inference
+            x = list_to_padded_array(cepstrum, size_x[0])
         except ValueError:
             print("AudioLengthException: The audio to infer is longer than max_time at training.", file=sys.stderr)
             return
@@ -971,7 +978,8 @@ class AcousticModel(object):
                                           "ph_y:0": np.zeros((1, 1), dtype=np.int32),
                                           "ph_size_x:0": size_x,
                                           "ph_is_train:0": False,
-                                          "ph_dropout:0": [0.0, 0.0, 0.0]})
+                                          "ph_dropout:0": [0.0, 0.0, 0.0],
+                                          "prepare_data/ph_handle:0": None})
 
         print("\n_____TRANSCRIPT_____:\n{}".format("".join([self.n2c_map[c] for c in output[0][0, :] if c != -1])))
 
