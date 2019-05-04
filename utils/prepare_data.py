@@ -5,7 +5,7 @@ from itertools import compress
 import numpy as np
 
 from FeatureExtraction import FeatureExtractor
-from DataLoader import PDTSCLoader
+from DataLoader import DataLoader, PDTSCLoader, OralLoader
 
 
 def get_file_paths(audio_folder, transcript_folder):
@@ -27,21 +27,33 @@ def get_file_names(files):
     return [os.path.splitext(os.path.split(file[0])[1])[0] for file in files]
 
 
-def prepare_data(files, save_folder, feature_type="MFSC", bigrams=False, repeated=False,
+def prepare_data(files, save_folder, dataset="pdtsc", label_max_duration=10.0, feature_type="MFSC", bigrams=False, repeated=False,
                  energy=True, deltas=(0, 0), nbanks=40, filter_nan=True, sort=True):
     cepstra_length_list = []
 
     file_names = get_file_names(files)
 
     for i, file in enumerate(files):
-        pdtsc = PDTSCLoader([file[0]], [file[1]], bigrams, repeated)
-        labels = pdtsc.transcripts_to_labels()  # list of lists of 1D numpy arrays
-        labels = labels[0]  # flatten label list
-        audio, fs = pdtsc.load_audio()
+        if dataset == "pdtsc":
+            pdtsc = PDTSCLoader([file[0]], [file[1]], bigrams, repeated)
+            labels = pdtsc.transcripts_to_labels()  # list of lists of 1D numpy arrays
+            labels = labels[0]  # flatten label list
+            audio_list, fs = pdtsc.load_audio()
+            audio = audio_list[0]
+        elif dataset == "oral":
+            oral = OralLoader([file[0]], [file[1]], bigrams, repeated)
+            label_dict = oral.transcripts_to_labels(label_max_duration)  # Dict['file_name':Tuple[sents_list, starts_list, ends_list]]
+            audio_dict, fs_dict = oral.load_audio()  # Dicts['file_name']
+
+            labels = label_dict[file_names[i]]
+            audio = audio_dict[file_names[i]]
+            fs = fs_dict[file_names[i]]
+        else:
+            raise ValueError("'dataset' argument must be either 'pdtsc' or 'oral'")
 
         full_save_path = os.path.join(save_folder, file_names[i])
 
-        feat_ext = FeatureExtractor(audio[0], fs, feature_type=feature_type, energy=energy, deltas=deltas, nbanks=nbanks)
+        feat_ext = FeatureExtractor(audio, fs, feature_type=feature_type, energy=energy, deltas=deltas, nbanks=nbanks)
         cepstra = feat_ext.transform_data()  # list of 2D arrays
 
         # filter out cepstra which are containing nan values
@@ -57,11 +69,17 @@ def prepare_data(files, save_folder, feature_type="MFSC", bigrams=False, repeate
         FeatureExtractor.save_cepstra(cepstra, full_save_path, exist_ok=True)
 
         # SAVE Transcripts to files (labels)
-        pdtsc.save_labels([labels], save_folder, exist_ok=True)
+        if dataset == 'pdtsc':
+            pdtsc.save_labels([labels], save_folder, exist_ok=True)
+        elif dataset == 'oral':
+            label_dict[file_names[i]] = labels
+            oral.save_labels(label_dict, save_folder, exist_ok=True)
+        else:
+            raise ValueError("'dataset' argument must be either 'pdtsc' or 'oral'")
 
         # __Checking SAVE/LOAD consistency__
         loaded_cepstra, loaded_cepstra_paths = FeatureExtractor.load_cepstra(full_save_path)
-        loaded_labels, loaded_label_paths = pdtsc.load_labels(full_save_path)
+        loaded_labels, loaded_label_paths = DataLoader.load_labels(full_save_path)
 
         # flatten the lists
         loaded_cepstra, loaded_cepstra_paths, loaded_labels, loaded_label_paths = (loaded_cepstra[0],
@@ -72,8 +90,12 @@ def prepare_data(files, save_folder, feature_type="MFSC", bigrams=False, repeate
         for j in range(len(cepstra)):
             if np.any(np.not_equal(cepstra[j], loaded_cepstra[j])):
                 raise UserWarning("Saved and loaded cepstra are not value consistent.")
-            if np.any(np.not_equal(labels[j], loaded_labels[j])):
-                raise UserWarning("Saved and loaded labels are not value consistent.")
+            if dataset == 'pdtsc':
+                if np.any(np.not_equal(labels[j], loaded_labels[j])):
+                    raise UserWarning("Saved and loaded labels are not value consistent.")
+            elif dataset == 'oral':
+                if np.any(np.not_equal(labels[j][0], loaded_labels[j])):
+                    raise UserWarning("Saved and loaded labels are not value consistent.")
 
             # add (cepstrum_path, label_path, cepstrum_length) tuple into collective list for sorting
             cepstra_length_list.append((loaded_cepstra_paths[j], loaded_label_paths[j], loaded_cepstra[j].shape[0]))
@@ -101,16 +123,22 @@ def prepare_data(files, save_folder, feature_type="MFSC", bigrams=False, repeate
 
 if __name__ == '__main__':
     # extracting audiofiles, transforming into cepstra and saving to separate folders
+    dataset = "oral"
     feature_type = "MFSC"
-    label_type = "bigram"
-
+    label_type = "unigram"
     bigrams = True if label_type == "bigram" else False
+    repeated = False
+    energy = True
+    deltas = (2, 2)
+    nbanks = 40
+    filter_nan = True
 
-    audio_folder = "C:/!temp/raw_debug/audio/"
-    transcript_folder = "C:/!temp/raw_debug/transcripts/"
-    save_folder = 'C:/!temp/{}_{}_debug/'.format(feature_type, label_type)
+    audio_folder = "D:/Audio/CeskyNarodniKorpus/oral2013/audio/"
+    transcript_folder = "D:/Audio/CeskyNarodniKorpus/oral2013/transcripts/"
+    save_folder = 'B:/!temp/{}_{}_{}_{}_banks/'.format(dataset.upper(), feature_type, label_type, nbanks)
 
     files = get_file_paths(audio_folder, transcript_folder)
 
-    prepare_data(files, save_folder, feature_type="MFSC", bigrams=bigrams, repeated=True,
-                 energy=True, deltas=(2, 2), nbanks=40, filter_nan=True)
+    prepare_data(files, save_folder, dataset=dataset, feature_type=feature_type,
+                 bigrams=bigrams, repeated=repeated, energy=energy,
+                 deltas=deltas, nbanks=nbanks, filter_nan=filter_nan)

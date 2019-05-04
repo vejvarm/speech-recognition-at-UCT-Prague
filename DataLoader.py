@@ -3,6 +3,7 @@ import os
 
 from copy import deepcopy
 from math import factorial
+from itertools import compress
 
 # from icu import LocaleData
 import numpy as np
@@ -313,8 +314,8 @@ class PDTSCLoader(DataLoader):
             tspan = np.arange(tstart, tend, tstep, dtype=np.float32)
 
             # find indices corresponding to the start and end times of the transcriptions
-            starts_idcs = np.asarray(*[np.searchsorted(tspan, start) for start in self.starts], dtype=np.int32)
-            ends_idcs = np.asarray(*[np.searchsorted(tspan, end) for end in self.ends], dtype=np.int32)
+            starts_idcs = np.asarray([np.searchsorted(tspan, start) for start in self.starts[i]], dtype=np.int32)
+            ends_idcs = np.asarray([np.searchsorted(tspan, end) for end in self.ends[i]], dtype=np.int32)
 
             # split the signal to intervals (starts_idcs[j], ends_idcs[j])
             # self.audio[i] = [signal[st_idx:ed_idx] for st_idx, ed_idx in zip(starts_idcs, ends_idcs)]
@@ -325,6 +326,189 @@ class PDTSCLoader(DataLoader):
     @staticmethod
     def save_audio(file, audio, fs):
         sf.write(file, audio, fs)
+
+
+class OralLoader(DataLoader):
+    c2n_map = DataLoader.c2n_map
+    c2n_map['*'] = 13  # ch character is subbed as * but in the reverse map it is still 'ch'
+
+    def __init__(self, audiofiles, transcripts, bigrams=False, repeated=False):
+        super().__init__(audiofiles, transcripts, bigrams, repeated)
+        self.labels = None
+        self.audio = dict()  # audiofile dictionary with filenames as keys
+        self.fs = dict()  # sampling frequencies of the audiofiles with filenames as keys
+
+    def transcripts_to_labels(self, label_max_duration=10.0):
+        turn_info = [list() for _ in range(len(self.transcripts))]
+        turn_info_no_overlap = [list() for _ in range(len(self.transcripts))]
+        reg_ch = r'ch'  # any sequence of characters 'ch' ... which counts as a single character in Czech
+        reg_pthses = r'\(.*?\)'  # any character between parentheses () -- in oral it marks special sounds (laugh, ambient, ...)
+        reg_not_czech = r'[^A-Za-záéíóúýčďěňřšťůž ]+'  # all nonalphabetic characters (czech alphabet)
+        labels = dict()
+        for idx, file in enumerate(self.transcripts):
+            with open(file, 'r', encoding='cp1250') as f:
+                raw = f.read()
+
+            soup = BeautifulSoup(raw, 'lxml')
+
+            file_name = soup.find('trans')['audio_filename']
+            speakers = {s['id'] for s in
+                        soup.find_all('speaker')}  # speaker id's that appear in the current transcript file
+            turns = soup.find_all('turn')
+
+            # extract time_spans and number of speakers from each turn
+            for i, t in enumerate(turns):
+                sync_times = [float(sync['time']) for sync in t.find_all('sync')]
+                turn_info[idx].append({
+                    'sync_times': list(zip(sync_times, [*sync_times[1:], float(t['endtime'])])),
+                    'speakers': t['speaker'].split(' ') if 'speaker' in t.attrs.keys() else [],
+                    'text': [' '.join(re.sub(reg_not_czech, '',  # remove nonalphabetic characters
+                                             re.sub(reg_pthses, '',
+                                                    # remove anything in parentheses including the parentheses
+                                                    txt.lower())).split()) for txt in t.text[:-1].split('\n\n')[1:]]
+                })
+
+            # GET TURNS WITH EXACTLY 1 SPEAKER (removes overlap and ambient noises)
+            # create mask in which True means that there is exactly 1 speaker
+            one_speaker_mask = [len(turn['speakers']) == 1 for turn in turn_info[idx]]
+            num_removed = len(one_speaker_mask) - sum(one_speaker_mask)
+            # compress the lists using the mask
+            turns_no_overlap = list(compress(turns, one_speaker_mask))
+            turn_info_no_overlap[idx] = list(compress(turn_info[idx], one_speaker_mask))
+
+            assert len(turns_no_overlap) == len(turns) - num_removed
+            assert len(turn_info_no_overlap[idx]) == len(turn_info[idx]) - num_removed
+            assert all([len(t['speakers']) == 1 for t in turn_info_no_overlap[idx]])
+
+            # TODO: split into transcripts with time length of 'label_max_duration' seconds or less
+            sents = []
+            starts = []
+            ends = []
+            for info in turn_info_no_overlap[idx]:
+                sync_times, speaker, text = info.values()
+                assert len(sync_times) == len(text)
+                # fill sents, starts and ends with the first entries in turn_info
+                starts.append(sync_times[0][0])
+                ends.append(sync_times[0][1])
+                sent_duration = sync_times[0][1] - sync_times[0][0]
+                sents.append(text[0])
+                for i in range(1, len(sync_times)):
+                    utterance_duration = sync_times[i][1] - sync_times[i][0]
+                    # TODO: if current sent duration is shorter than 'label_max_duration' seconds, add to end time, else
+                    if sent_duration + utterance_duration < label_max_duration:
+                        ends[-1] = sync_times[i][1]
+                        sent_duration += utterance_duration
+                        sents[-1] += ' ' + text[i]
+                    else:
+                        starts.append(sync_times[i][0])
+                        ends.append(sync_times[i][1])
+                        sent_duration = sync_times[i][1] - sync_times[i][0]
+                        sents.append(text[i])
+
+            # convert the sentences into integer arrays
+            sents = [np.array([self.c2n_map[c] for c in re.sub(reg_ch, '*', s)]) for s in sents]
+            labels[file_name] = tuple(zip(sents, starts, ends))
+
+        self.labels = labels
+
+        return labels
+
+    def load_audio(self):
+        for i, file in enumerate(self.audiofiles):
+            path, filename = os.path.split(file)
+            filename, ext = os.path.splitext(filename)
+
+            signal, fs = sf.read(file)
+
+            # create array with sampling times of the audiofile
+            tstart = 0
+            tend = signal.shape[0] / fs
+            tstep = 1 / fs
+            tspan = np.arange(tstart, tend, tstep, dtype=np.float32)
+
+            starts = []
+            ends = []
+            for label in self.labels[filename]:
+                starts.append(label[1])
+                ends.append(label[2])
+
+            starts_idcs = np.asarray([np.searchsorted(tspan, start) for start in starts], dtype=np.int32)
+            ends_idcs = np.asarray([np.searchsorted(tspan, end) for end in ends], dtype=np.int32)
+
+            self.audio[filename] = [signal[starts_idcs[j]:ends_idcs[j]] for j in range(starts_idcs.shape[0])]
+            self.fs[filename] = fs
+
+        return self.audio, self.fs
+
+    @staticmethod
+    def save_audio(file, audio, fs):
+        sf.write(file, audio, fs)
+
+    def save_labels(self, labels=None, folder='./data/oral2013/', exist_ok=False):
+        """
+        Save labels of transcripts to specified folder under folders with names equal to name of the transcrips files
+        """
+        if not labels:
+            if self.labels:
+                labels = self.labels
+            else:
+                print('No labels were given and the class labels have not been generated yet.'
+                      'Please call transcripts_to_labels class function first.')
+                return
+
+        subfolders = tuple(labels.keys())
+
+        try:
+            for subfolder in subfolders:
+                os.makedirs(os.path.join(folder, subfolder), exist_ok=exist_ok)
+        except OSError:
+            print('Subfolders already exist. Please set exist_ok to True if you want to save into them anyway.')
+            return
+
+        for key, vals in labels.items():
+            ndigits = len(str(len(vals)))
+            fullpath = os.path.join(folder, key)
+            for i, (sent, _, _) in enumerate(vals):
+                np.save('{0}/transcript-{1:0{2}d}.npy'.format(fullpath, i, ndigits), sent)
+            print(key + ' saved to ' + fullpath)
+
+    @staticmethod
+    def load_labels(path_to_files='./data'):
+        """ Load labels of transcripts from transcript-###.npy files in specified folder
+        into a dictionary of labels and paths to their files
+        :param path_to_files: string path leading to the folder with transcript files or .npy trascript file
+
+        :return Dict["folder/file_name":Tuple[List[labels], List[path_to_files]]]
+        """
+
+        ext = os.path.splitext(path_to_files)[1]
+
+        # if path_to_files leads to a single (.npy) file , load only the one file
+        if ext == ".npy":
+            key = os.path.splitext(os.path.basename(path_to_files))[0]
+            labels = {key: ([np.load(path_to_files)],
+                            [os.path.abspath(path_to_files)])}
+        elif not ext:
+            # if the path_to_files contains subfolders, load data from all subfolders
+            labels = dict()
+            path_list = []
+            subfolders = [os.path.join(path_to_files, subfolder) for subfolder in next(os.walk(path_to_files))[1]]
+
+            # if there are no subfolders in the provided path_to_files, look directly in path_to_files
+            if not subfolders:
+                subfolders.append(path_to_files)
+
+            for sub in subfolders:
+                files = [os.path.splitext(f) for f in os.listdir(sub) if
+                         os.path.isfile(os.path.join(sub, f))]
+                paths = [os.path.abspath(os.path.join(sub, ''.join(file)))
+                         for file in files if 'transcript' in file[0] and file[-1] == '.npy']
+                sublabels = [np.load(path) for path in paths]
+                labels[os.path.normpath(sub).split('\\')[-1]] = tuple(zip(sublabels, paths))
+        else:
+            raise IOError("Specified file doesn't have .npy suffix.")
+
+        return labels
 
 
 if __name__ == '__main__':
@@ -340,6 +524,7 @@ if __name__ == '__main__':
     pdtsc.transcripts_to_labels()
     print(pdtsc.tokens[0][0])
     print(pdtsc.labels[0][0])
+    print(pdtsc.load_audio())
 #    pdtsc.save_audio('./data/test_saved.ogg', pdtsc.audio[0][1], pdtsc.fs[0])
 #    pdtsc.save_labels(folder='./data/train', exist_ok=True)
 
