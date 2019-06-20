@@ -125,7 +125,12 @@ class FeatureExtractor:
             frames = [row[i * stride_len:i * stride_len + frame_len].T for i in range(n_frames)]
 
             # last frame should be padded to same length as the other frames
-            if len(frames[-1]) < frame_len:
+            if n_frames < 1:
+                nan_frame = np.empty((1, frame_len))
+                nan_frame[:] = np.nan
+                frames.append(nan_frame)
+                print('n_frames ({}) is less than 1 - adding 1 frame with NaN values for filtering.'.format(n_frames))
+            elif len(frames[-1]) < frame_len:
                 frames[-1] = np.pad(frames[-1], (0, frame_len - len(frames[-1])), 'constant', constant_values=0)
 
             framed_data[i] = np.vstack(frames)

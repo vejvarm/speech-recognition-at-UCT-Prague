@@ -40,6 +40,7 @@ def prepare_data(files, save_folder, dataset="pdtsc", label_max_duration=10.0, f
             labels = labels[0]  # flatten label list
             audio_list, fs = pdtsc.load_audio()
             audio = audio_list[0]
+            fs = fs[0]
         elif dataset == "oral":
             oral = OralLoader([file[0]], [file[1]], bigrams, repeated)
             label_dict = oral.transcripts_to_labels(label_max_duration)  # Dict['file_name':Tuple[sents_list, starts_list, ends_list]]
@@ -123,7 +124,7 @@ def prepare_data(files, save_folder, dataset="pdtsc", label_max_duration=10.0, f
 
 if __name__ == '__main__':
     # extracting audiofiles, transforming into cepstra and saving to separate folders
-    dataset = "oral"
+    dataset = "pdtsc"
     feature_type = "MFSC"
     label_type = "unigram"
     bigrams = True if label_type == "bigram" else False
@@ -132,13 +133,14 @@ if __name__ == '__main__':
     deltas = (2, 2)
     nbanks = 40
     filter_nan = True
+    sort = False
 
-    audio_folder = "D:/Audio/CeskyNarodniKorpus/oral2013/audio/"
-    transcript_folder = "D:/Audio/CeskyNarodniKorpus/oral2013/transcripts/"
+    audio_folder = "D:/Audio/Speech_Datasets/PDTSC/audio/"
+    transcript_folder = "D:/Audio/Speech_Datasets/PDTSC/transcripts/"
     save_folder = 'B:/!temp/{}_{}_{}_{}_banks/'.format(dataset.upper(), feature_type, label_type, nbanks)
 
     files = get_file_paths(audio_folder, transcript_folder)
 
     prepare_data(files, save_folder, dataset=dataset, feature_type=feature_type,
                  bigrams=bigrams, repeated=repeated, energy=energy,
-                 deltas=deltas, nbanks=nbanks, filter_nan=filter_nan)
+                 deltas=deltas, nbanks=nbanks, filter_nan=filter_nan, sort=sort)

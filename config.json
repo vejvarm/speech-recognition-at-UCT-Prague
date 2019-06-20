@@ -36,7 +36,7 @@
   "cepstrum_pad_val": 0.0,
   "label_pad_val": -1,
 
-  "conv_switch": true,
+  "conv_switch": false,
   "conv_filter_dims": [[11, 21], [11, 11], [11, 11]],
   "conv_strides": [[1, 2], [1, 2], [1, 2]],
   "conv_in_channels": [1, 32, 32],
@@ -45,13 +45,13 @@
   "conv_padding": "SAME",
   "conv_batch_norm": true,
 
-  "ff_switch": false,
-  "ff_num_hidden": [2048, 1024, 512],
+  "ff_switch": true,
+  "ff_num_hidden": [2048, 2048, 1024],
   "ff_dropout": [0.2, 0.2, 0.1],
   "ff_batch_norm": true,
   "relu_clip": 20,
 
-  "rnn_num_hidden": [512, 512],
+  "rnn_num_hidden": [256, 256],
   "rnn_use_peephole": true,
   "rnn_batch_norm": false,
 
@@ -66,7 +66,7 @@
   "lr": 0.1,
   "epsilon": 0.1,
   "grad_clip": "global_norm",
-  "grad_clip_val": 400,
+  "grad_clip_val": 10,
 
   "show_device_placement": false,
   "print_batch_x": false,

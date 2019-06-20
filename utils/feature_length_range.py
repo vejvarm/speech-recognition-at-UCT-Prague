@@ -70,7 +70,7 @@ def feature_length_range(load_dir, save_dir, min_frame_length=100, max_frame_len
 if __name__ == '__main__':
     min_frame_length = 100
     max_frame_length = 3000
-    load_dir = "c:/!temp/MFSC_deltas/"
-    save_dir = "../data/MFSC_deltas_min_{}_max_{}".format(min_frame_length, max_frame_length)
+    load_dir = "b:/!temp/PDTSC_MFSC_unigram_40_banks/"
+    save_dir = "b:/!temp/PDTSC_MFSC_unigram_40_banks_min_{}_max_{}".format(min_frame_length, max_frame_length)
 
     feature_length_range(load_dir, save_dir, min_frame_length, max_frame_length, mode='move')
