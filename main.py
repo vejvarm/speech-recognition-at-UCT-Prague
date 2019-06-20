@@ -1,51 +1,41 @@
+import time
+
 from models.AcousticModel import AcousticModel
 
-from matplotlib import pyplot as plt
-import tensorflow as tf
+# TODO: efficient dataset pipeline (work with only paths to files until needed)
+# https://www.tensorflow.org/tutorials/load_data/images
 
-# TODO: fix exploding loss values at second epoch --> gradient_clipping
+# __ DS2: https://arxiv.org/pdf/1512.02595.pdf __
+# GRU or even simple RNN instead of LSTM
+# 1D or 2D convolution as the first layer (with stride > 1 for reducing sequence length for RNN)
+# TODO: Implement SortaGrad
+# TODO: RNN batch normalisation
+# TODO: connecting labels to bigrams (increasing vocab size but reducing transcript length allowing bigger cnn stride)
+
+# __ FEATURES __
+# MFSC or spectrogram instead of MFCC
+
+# __ PARALLELISATION __
+# TODO: Model parallelism (TOWERS: same model on multiple GPU's with different batches going through them)
+# Two cards (same specs) --> double the batch size
+
+# TODO: feeding data in at inference -> determine what should be ran at __init__ when do_train is false
+# https://stackoverflow.com/questions/50986886/how-to-inference-with-a-single-example-in-tensorflow-with-dataset-pipeline
+# Bias gradients in LSTM are absurdly high (thousands)
+# suffle the order of batches (keeps similar lengths in batch but adds variability through epochs)
+# decaying learning rate
+# TODO: https://www.tensorflow.org/api_docs/python/tf/custom_gradient
+# TODO: cyclic learning rate
 if __name__ == '__main__':
-    config_path = "./config"
-    ac_model = AcousticModel(config_path)
+    config_path = "./config.json"
+    audiofile = "./data/dobry_den.wav"
+    num_repeats = 1
 
-    ac_model.train(save_every=1)
+    for _ in range(num_repeats):
+        ac_model = AcousticModel(config_path)
 
-    # with ac_model.sess as sess:
-    #     # training dataset
-    #     sess.run(tf.global_variables_initializer())
-    #     # training dataset
-    #     for epoch in range(epochs):
-    #         print("EPOCH {}".format(epoch))
-    #         total_train_loss = 0
-    #         count_train = 0
-    #         sess.run(ac_model.inputs["init_train"])
-    #         print("_____TRAINING DATA_____")
-    #         try:
-    #             while True:
-    #                 _, ctc_loss, avg_loss, output = sess.run([ac_model.outputs["optimizer"],
-    #                                                           ac_model.outputs["ctc_loss"],
-    #                                                           ac_model.outputs["avg_loss"],
-    #                                                           ac_model.outputs["ctc_output"]])
-    #                 total_train_loss += avg_loss
-    #                 count_train += 1
-    #                 if count_train % 2 == 0:
-    #                     print("BATCH {} | Avg. Loss {}".format(count_train, avg_loss))
-    #         except tf.errors.OutOfRangeError:
-    #             print("Total Loss: {}".format(total_train_loss))
-    #             print("Output Example: {}".format(output))
-    #
-    #         total_test_loss = 0
-    #         count_test = 0
-    #         sess.run(ac_model.inputs["init_test"])
-    #         print("_____TESTING DATA_____")
-    #         try:
-    #             while True:
-    #                 ctc_loss, avg_loss, output = sess.run([ac_model.outputs["ctc_loss"],
-    #                                                        ac_model.outputs["avg_loss"],
-    #                                                        ac_model.outputs["ctc_output"]])
-    #                 total_test_loss += avg_loss
-    #                 count_test += 1
-    #                 print("BATCH {} | Avg. Loss {}".format(count_test, avg_loss))
-    #         except tf.errors.OutOfRangeError:
-    #             print("Total Loss: {}".format(total_test_loss))
-    #             print("Output Example: {}".format(output))
+        ac_model.train(save_every=1)
+        # t = time.time()
+        # ac_model.infer(audiofile)
+        # print(time.time() - t)
+

@@ -3,7 +3,7 @@ import numpy as np
 from matplotlib import pyplot as plt
 from scipy.io import wavfile  # for loading WAV audio file format
 
-from MFCC import MFCC
+from FeatureExtraction import FeatureExtractor
 
 def plot_signal(time, signal, title=''):
     plt.plot(time, signal)
@@ -47,12 +47,10 @@ if __name__ == '__main__':
     data = [audio]
     fs = sample_rate
 
-    mfcc = MFCC(data, fs)
+    mfcc = FeatureExtractor(data, fs, feature_type="MFSC", deltas=(2, 2))
 
     cepstra = mfcc.transform_data()
-    cepstraDelta = mfcc.transform_data(deltas=(2, 0))
-    cepstraDelta2 = mfcc.transform_data(deltas=(2, 2))
-    power_sfft = mfcc.power_sfft[0]
+    power_sfft = mfcc.power_stft[0]
     log_sum = mfcc.log_sum[0]
 
     timespan = np.arange(len(audio)) / fs
@@ -79,17 +77,8 @@ if __name__ == '__main__':
     plot_logsum(framespan, mfcc.nbanks, log_sum, title='log10 of matmul(P,F).')
     plt.savefig(folder + 'logsum.png', dpi=dpi)  # save the figure
 
-    # plot final mfcc
+    # plot final features
     mfcc.plot_cepstra(cepstra, nplots=1)
     plt.savefig(folder + 'mfcc.png', dpi=dpi)  # save the figure
-
-    # plot mfcc with deltas
-    mfcc.plot_cepstra(cepstraDelta, nplots=1)
-    plt.savefig(folder + 'mfccDelta.png', dpi=dpi)  # save the figure
-
-    # plot mfcc with delta-deltas
-    mfcc.plot_cepstra(cepstraDelta2, nplots=1)
-    plt.savefig(folder + 'mfccDelta2.png', dpi=dpi)  # save the figure
-
 
     plt.show()

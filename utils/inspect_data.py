@@ -1,14 +1,14 @@
 import os
 import shutil
 
-from MFCC import MFCC
+from FeatureExtraction import FeatureExtractor
 from DataLoader import DataLoader
 
 
 def load_data(cepstra_load_dir=None, transcript_load_dir=None):
 
     if cepstra_load_dir:
-        cepstra, cepstra_paths = MFCC.load_cepstra(cepstra_load_dir)
+        cepstra, cepstra_paths = FeatureExtractor.load_cepstra(cepstra_load_dir)
     else:
         cepstra, cepstra_paths = (None, None)
 

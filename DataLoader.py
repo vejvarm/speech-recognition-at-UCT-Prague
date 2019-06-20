@@ -1,11 +1,17 @@
 import re
 import os
 
+from copy import deepcopy
+from math import factorial
+from itertools import compress
+
 # from icu import LocaleData
 import numpy as np
-import soundfile as sf  # for loading OGG audio file format
+import soundfile as sf  # for loading audio in various formats (OGG, WAV, FLAC, ...)
 
 from bs4 import BeautifulSoup
+
+from helpers import extract_channel
 
 
 # TODO: exclude cepstra which are longer than a set number of frames
@@ -17,35 +23,43 @@ class DataLoader:
                'z': 40, 'ž': 41, ' ': 42}
     n2c_map = {val: idx for idx, val in c2n_map.items()}
 
-    def __init__(self, audiofiles, transcripts):
+    def __init__(self, audiofiles, transcripts, bigrams=False, repeated=False):
         """ Initialize DataLoader() object
 
         :param audiofiles: list of paths to audio files
         :param transcripts: list of paths to transcripts of the audio files
+        :param bigrams: (bool) whether the labels should be made into bigrams or not
+        :param repeated: (bool) whether the bigrams should contain repeated characters (eg: 'aa', 'bb')
         """
         self.audiofiles = audiofiles
         self.transcripts = transcripts
+        self.bigrams = bigrams
+        self.repeated = repeated
         self.audio = [[np.array(0, dtype=np.float32)]]*len(self.audiofiles)
         self.fs = np.zeros((len(self.audiofiles)), dtype=np.uint16)            # sampling rates of the loaded audio files
         self.starts = [np.array(0, dtype=np.float32)]*len(self.transcripts)    # list of lists of starting times of the sentences
         self.ends = [np.array(0, dtype=np.float32)]*len(self.transcripts)      # list of lists of ending times of the sentences
         self.tokens = [[]]*len(self.transcripts)    # list of lists of tokens (sentences) from transcripts
-        self.labels = [[np.array(0, dtype=np.uint8)]]*len(self.transcripts)  # list of arrays which will contain numeric representations of characters
-        # self.c2n_map = {char: i for i, char in enumerate(string.alpha)}
+        self.labels = [[np.array(0, dtype=np.int32)]]*len(self.transcripts)  # list of arrays which will contain numeric representations of characters
 
-    def char2num(self, sentlist):
+        if self.bigrams:
+            self.b2n_map = self.calc_bigram_map(self.c2n_map, repeated=self.repeated)
+            self.n2b_map = self.calc_bigram_map(self.n2c_map, repeated=self.repeated)
+
+    @staticmethod
+    def char2num(sentlist, c2n_map):
         """ Transform list of sentences (tokens) to list of lists with numeric representations of the
         characters depending on their position in the czech alphabet.
         """
-        arraylist = [np.asarray([self.c2n_map[c] if c in self.c2n_map.keys() else self.c2n_map[' ']
-                                 for c in chars.lower()], dtype=np.uint8) for chars in sentlist]
+        arraylist = [np.asarray([c2n_map[c] if c in c2n_map.keys() else c2n_map[' ']
+                                 for c in chars.lower()], dtype=np.int32) for chars in sentlist]
         for i in range(len(arraylist)):
             ch_idcs = [(r.start(), r.end() - 1) for r in re.finditer('ch', sentlist[i])]
 
             # change arraylist at ch_idcs starts to number for symbol 'ch'
             mask_change = np.zeros(len(arraylist[i]), dtype=bool)
             mask_change[[tup[0] for tup in ch_idcs]] = True
-            arraylist[i][mask_change] = self.c2n_map['ch']
+            arraylist[i][mask_change] = c2n_map['ch']
 
             # remove elements after added numbers for symbol 'ch'
             mask_delete = np.ones(len(arraylist[i]), dtype=bool)
@@ -54,51 +68,152 @@ class DataLoader:
 
         return arraylist
 
-    def num2char(self, arraylist):
-        """ Transform list of numpy arrays with chacater numbers to list of sentences """
-
-        return [''.join([self.n2c_map[o] for o in arr]) for arr in arraylist]
+    @staticmethod
+    def bigram2num(bigramlist, b2n_map):
+        """ Transform list of lists of bigrams to numeric values"""
+        return [[b2n_map[bigram] for bigram in token] for token in bigramlist]
 
     @staticmethod
-    def extract_channel(signal, channel_number):
-        """Extract single channel from a multi-channel (stereo) signal"""
-        try:
-            return signal[:, channel_number]
-        except IndexError:
-            return signal
+    def num2char(arraylist, n2c_map):
+        """ Transform list of numpy arrays with chacater/bigram numbers to list of sentences"""
+        return [''.join([n2c_map[o] for o in arr]) for arr in arraylist]
 
     @staticmethod
-    def load_labels(folder='./data'):
+    def k_perms_of_n(k, n, repeated=True):
+        if repeated:
+            return n**k
+        else:
+            if k <= n:
+                return factorial(n) // factorial(n - k)
+            else:
+                raise ValueError("When repeated==False, k must be less than or equal to n")
+
+    @staticmethod
+    def calc_bigram_map(input_dict, repeated=True):
+        """calculate non-overlapping bigrams from input_dict of n elements
+
+        :param input_dict: dictionary with types {str: int} or {int: str}
+        :param repeated: if True, include bigrams with duplicate entries (eg. 'aa', 'bb')
+        """
+
+        dict_keys = list(input_dict.keys())
+        dict_vals = list(input_dict.values())
+
+        key_types = [type(dict_keys[i]) for i in range(len(input_dict))]
+        val_types = [type(dict_vals[i]) for i in range(len(input_dict))]
+
+        if all(key_types[i] == key_types[0] for i in range(len(input_dict))):
+            key_type = key_types[0]
+        else:
+            raise TypeError("Key types are not consistent.")
+
+        if all(val_types[i] == val_types[0] for i in range(len(input_dict))):
+            val_type = val_types[0]
+        else:
+            raise TypeError("Value types are not consistent.")
+
+        if key_type == str and val_type == int:
+            dct = {v: k for k, v in input_dict.items()}  # switch the types to {int: str}
+        elif key_type == int and val_type == str:
+            dct = deepcopy(input_dict)  # create deepcopy with types {int: str}
+        else:
+            raise TypeError("Keys and Values of the input_dict must have dtypes {int: str} or {str: int}.")
+
+        # remove space character from dct
+        space_key = list(dct.keys())[list(dct.values()).index(' ')]
+        dct.pop(space_key)
+
+        vocab_size = len(dct)
+
+        outputs = list(dct.values())
+
+        for i in range(vocab_size):
+            if repeated:
+                other_vals = set(dct.values())
+            else:
+                other_vals = [val for key, val in dct.items() if key != i]
+            outputs.extend([dct[i] + val for val in other_vals])
+
+        # add space character at the end of the new dict
+        outputs.extend(' ')
+
+        bigram_size = DataLoader.k_perms_of_n(2, vocab_size, repeated=repeated)
+        assert len(outputs) == bigram_size + vocab_size + 1, \
+            'Number of entries in output dictionary is not consistent with expected number of bigrams'
+
+        # remove duplicate entry of 'ch'
+        outputs.pop(outputs.index('ch', vocab_size))
+
+        out_dict = dict(enumerate(outputs))
+
+        if key_type == str:
+            return {v: k for k, v in out_dict.items()}
+        else:
+            return out_dict
+
+    @staticmethod
+    def tokens_to_bigrams(tokens):
+        bigram_list = []
+        for token in tokens:
+            bigrams = []
+            for word in token.split(' '):
+                # temporarily replace 'ch' with '*' so that it counts as one character
+                word = re.sub('ch', '*', word)
+                word_len = len(word)
+                bigrams.extend([word[i - 1] + word[i] for i in range(1, word_len, 2)])
+                if word_len % 2:
+                    bigrams.append(word[-1])
+                bigrams.append(' ')
+            bigrams.pop()
+            # turn '*' chars back to 'ch'
+            for i in range(len(bigrams)):
+                bigrams[i] = re.sub('\*', 'ch', bigrams[i])
+            bigram_list.append(bigrams)
+        return bigram_list
+
+    @staticmethod
+    def load_labels(path_to_files='./data'):
         """ Load labels of transcripts from transcript-###.npy files in specified folder
         into a list of lists of 1D numpy arrays
-        :param folder: string path leading to the folder with transcript files
+        :param path_to_files: string path leading to the folder with transcript files or .npy trascript file
 
-        :return list of lists of 2D numpy arrays, list of lists of strings with paths to files
+        :return list of lists of 1D numpy arrays, list of lists of strings with paths to files
         """
-        labels = []
-        path_list = []
-        subfolders = [os.path.join(folder, subfolder) for subfolder in next(os.walk(folder))[1]]
 
-        # if there are no subfolders in the provided folder, look for the transcripts directly in folder
-        if not subfolders:
-            subfolders.append(folder)
+        ext = os.path.splitext(path_to_files)[1]
 
-        for sub in subfolders:
-            files = [os.path.splitext(f) for f in os.listdir(sub) if
-                     os.path.isfile(os.path.join(sub, f))]
-            paths = [os.path.abspath(os.path.join(sub, ''.join(file)))
-                     for file in files if 'transcript' in file[0] and file[-1] == '.npy']
-            sublabels = [np.load(path) for path in paths]
-            path_list.append(paths)
-            labels.append(sublabels)
+        # if path_to_files leads to a single (.npy) file , load only the one file
+        if ext == ".npy":
+            labels = [[np.load(path_to_files)]]
+            path_list = [[os.path.abspath(path_to_files)]]
+        elif not ext:
+            # if the path_to_files contains subfolders, load data from all subfolders
+            labels = []
+            path_list = []
+            subfolders = [os.path.join(path_to_files, subfolder) for subfolder in next(os.walk(path_to_files))[1]]
+
+            # if there are no subfolders in the provided path_to_files, look directly in path_to_files
+            if not subfolders:
+                subfolders.append(path_to_files)
+
+            for sub in subfolders:
+                files = [os.path.splitext(f) for f in os.listdir(sub) if
+                         os.path.isfile(os.path.join(sub, f))]
+                paths = [os.path.abspath(os.path.join(sub, ''.join(file)))
+                         for file in files if 'transcript' in file[0] and file[-1] == '.npy']
+                sublabels = [np.load(path) for path in paths]
+                path_list.append(paths)
+                labels.append(sublabels)
+        else:
+            raise IOError("Specified file doesn't have .npy suffix.")
 
         return labels, path_list
 
 
 class PDTSCLoader(DataLoader):
 
-    def __init__(self, audiofiles, transcripts):
-        super().__init__(audiofiles, transcripts)
+    def __init__(self, audiofiles, transcripts, bigrams=False, repeated=False):
+        super().__init__(audiofiles, transcripts, bigrams, repeated)
 
     @staticmethod
     def time2secms(timelist):
@@ -131,7 +246,7 @@ class PDTSCLoader(DataLoader):
             token_tags = [LM.find_all('token') for LM in lm_tags]
 
             # process the tokens from token tags
-            regexp = r'[^A-Za-záéíóúýčďěňřšťůž{ch}]+'  # find all non alphabetic characters (Czech alphabet)
+            regexp = r'[^A-Za-záéíóúýčďěňřšťůž]+'  # find all non alphabetic characters (Czech alphabet)
             tokens = [' '.join([re.sub(regexp, '', token.text.lower()) for token in tokens])
                       for tokens in token_tags]  # joining sentences and removing special and numeric chars
 
@@ -151,7 +266,11 @@ class PDTSCLoader(DataLoader):
             assert len(self.ends[i]) == len(self.tokens[i]), "there is different number of tokens than end times"
 
             # convert characters in tokens to numeric values representing their position in the czech alphabet
-            self.labels[i] = self.char2num(self.tokens[i])
+            if self.bigrams:
+                bigrams = self.tokens_to_bigrams(tokens)
+                self.labels[i] = self.bigram2num(bigrams, self.b2n_map)
+            else:  # labels are unigrams
+                self.labels[i] = self.char2num(tokens, self.c2n_map)
 
         return self.labels
 
@@ -187,7 +306,7 @@ class PDTSCLoader(DataLoader):
         for i, file in enumerate(self.audiofiles):
             signal, self.fs[i] = sf.read(file)
 
-            signal = self.extract_channel(signal, 0)  # convert signal from stereo to mono by extracting channel 0
+            signal = extract_channel(signal, 0)  # convert signal from stereo to mono by extracting channel 0
 
             tstart = 0
             tend = signal.shape[0]/self.fs[i]
@@ -195,8 +314,8 @@ class PDTSCLoader(DataLoader):
             tspan = np.arange(tstart, tend, tstep, dtype=np.float32)
 
             # find indices corresponding to the start and end times of the transcriptions
-            starts_idcs = np.asarray(*[np.searchsorted(tspan, start) for start in self.starts], dtype=np.int32)
-            ends_idcs = np.asarray(*[np.searchsorted(tspan, end) for end in self.ends], dtype=np.int32)
+            starts_idcs = np.asarray([np.searchsorted(tspan, start) for start in self.starts[i]], dtype=np.int32)
+            ends_idcs = np.asarray([np.searchsorted(tspan, end) for end in self.ends[i]], dtype=np.int32)
 
             # split the signal to intervals (starts_idcs[j], ends_idcs[j])
             # self.audio[i] = [signal[st_idx:ed_idx] for st_idx, ed_idx in zip(starts_idcs, ends_idcs)]
@@ -209,30 +328,204 @@ class PDTSCLoader(DataLoader):
         sf.write(file, audio, fs)
 
 
+class OralLoader(DataLoader):
+    c2n_map = DataLoader.c2n_map
+    c2n_map['*'] = 13  # ch character is subbed as * but in the reverse map it is still 'ch'
+
+    def __init__(self, audiofiles, transcripts, bigrams=False, repeated=False):
+        super().__init__(audiofiles, transcripts, bigrams, repeated)
+        self.labels = None
+        self.audio = dict()  # audiofile dictionary with filenames as keys
+        self.fs = dict()  # sampling frequencies of the audiofiles with filenames as keys
+
+    def transcripts_to_labels(self, label_max_duration=10.0):
+        turn_info = [list() for _ in range(len(self.transcripts))]
+        turn_info_no_overlap = [list() for _ in range(len(self.transcripts))]
+        reg_ch = r'ch'  # any sequence of characters 'ch' ... which counts as a single character in Czech
+        reg_pthses = r'\(.*?\)'  # any character between parentheses () -- in oral it marks special sounds (laugh, ambient, ...)
+        reg_not_czech = r'[^A-Za-záéíóúýčďěňřšťůž ]+'  # all nonalphabetic characters (czech alphabet)
+        labels = dict()
+        for idx, file in enumerate(self.transcripts):
+            with open(file, 'r', encoding='cp1250') as f:
+                raw = f.read()
+
+            soup = BeautifulSoup(raw, 'lxml')
+
+            file_name = soup.find('trans')['audio_filename']
+            speakers = {s['id'] for s in
+                        soup.find_all('speaker')}  # speaker id's that appear in the current transcript file
+            turns = soup.find_all('turn')
+
+            # extract time_spans and number of speakers from each turn
+            for i, t in enumerate(turns):
+                sync_times = [float(sync['time']) for sync in t.find_all('sync')]
+                turn_info[idx].append({
+                    'sync_times': list(zip(sync_times, [*sync_times[1:], float(t['endtime'])])),
+                    'speakers': t['speaker'].split(' ') if 'speaker' in t.attrs.keys() else [],
+                    'text': [' '.join(re.sub(reg_not_czech, '',  # remove nonalphabetic characters
+                                             re.sub(reg_pthses, '',
+                                                    # remove anything in parentheses including the parentheses
+                                                    txt.lower())).split()) for txt in t.text[:-1].split('\n\n')[1:]]
+                })
+
+            # GET TURNS WITH EXACTLY 1 SPEAKER (removes overlap and ambient noises)
+            # create mask in which True means that there is exactly 1 speaker
+            one_speaker_mask = [len(turn['speakers']) == 1 for turn in turn_info[idx]]
+            num_removed = len(one_speaker_mask) - sum(one_speaker_mask)
+            # compress the lists using the mask
+            turns_no_overlap = list(compress(turns, one_speaker_mask))
+            turn_info_no_overlap[idx] = list(compress(turn_info[idx], one_speaker_mask))
+
+            assert len(turns_no_overlap) == len(turns) - num_removed
+            assert len(turn_info_no_overlap[idx]) == len(turn_info[idx]) - num_removed
+            assert all([len(t['speakers']) == 1 for t in turn_info_no_overlap[idx]])
+
+            # TODO: split into transcripts with time length of 'label_max_duration' seconds or less
+            sents = []
+            starts = []
+            ends = []
+            for info in turn_info_no_overlap[idx]:
+                sync_times, speaker, text = info.values()
+                assert len(sync_times) == len(text)
+                # fill sents, starts and ends with the first entries in turn_info
+                starts.append(sync_times[0][0])
+                ends.append(sync_times[0][1])
+                sent_duration = sync_times[0][1] - sync_times[0][0]
+                sents.append(text[0])
+                for i in range(1, len(sync_times)):
+                    utterance_duration = sync_times[i][1] - sync_times[i][0]
+                    # TODO: if current sent duration is shorter than 'label_max_duration' seconds, add to end time, else
+                    if sent_duration + utterance_duration < label_max_duration:
+                        ends[-1] = sync_times[i][1]
+                        sent_duration += utterance_duration
+                        sents[-1] += ' ' + text[i]
+                    else:
+                        starts.append(sync_times[i][0])
+                        ends.append(sync_times[i][1])
+                        sent_duration = sync_times[i][1] - sync_times[i][0]
+                        sents.append(text[i])
+
+            # convert the sentences into integer arrays
+            sents = [np.array([self.c2n_map[c] for c in re.sub(reg_ch, '*', s)]) for s in sents]
+            labels[file_name] = tuple(zip(sents, starts, ends))
+
+        self.labels = labels
+
+        return labels
+
+    def load_audio(self):
+        for i, file in enumerate(self.audiofiles):
+            path, filename = os.path.split(file)
+            filename, ext = os.path.splitext(filename)
+
+            signal, fs = sf.read(file)
+
+            # create array with sampling times of the audiofile
+            tstart = 0
+            tend = signal.shape[0] / fs
+            tstep = 1 / fs
+            tspan = np.arange(tstart, tend, tstep, dtype=np.float32)
+
+            starts = []
+            ends = []
+            for label in self.labels[filename]:
+                starts.append(label[1])
+                ends.append(label[2])
+
+            starts_idcs = np.asarray([np.searchsorted(tspan, start) for start in starts], dtype=np.int32)
+            ends_idcs = np.asarray([np.searchsorted(tspan, end) for end in ends], dtype=np.int32)
+
+            self.audio[filename] = [signal[starts_idcs[j]:ends_idcs[j]] for j in range(starts_idcs.shape[0])]
+            self.fs[filename] = fs
+
+        return self.audio, self.fs
+
+    @staticmethod
+    def save_audio(file, audio, fs):
+        sf.write(file, audio, fs)
+
+    def save_labels(self, labels=None, folder='./data/oral2013/', exist_ok=False):
+        """
+        Save labels of transcripts to specified folder under folders with names equal to name of the transcrips files
+        """
+        if not labels:
+            if self.labels:
+                labels = self.labels
+            else:
+                print('No labels were given and the class labels have not been generated yet.'
+                      'Please call transcripts_to_labels class function first.')
+                return
+
+        subfolders = tuple(labels.keys())
+
+        try:
+            for subfolder in subfolders:
+                os.makedirs(os.path.join(folder, subfolder), exist_ok=exist_ok)
+        except OSError:
+            print('Subfolders already exist. Please set exist_ok to True if you want to save into them anyway.')
+            return
+
+        for key, vals in labels.items():
+            ndigits = len(str(len(vals)))
+            fullpath = os.path.join(folder, key)
+            for i, (sent, _, _) in enumerate(vals):
+                np.save('{0}/transcript-{1:0{2}d}.npy'.format(fullpath, i, ndigits), sent)
+            print(key + ' saved to ' + fullpath)
+
+    @staticmethod
+    def load_labels(path_to_files='./data'):
+        """ Load labels of transcripts from transcript-###.npy files in specified folder
+        into a dictionary of labels and paths to their files
+        :param path_to_files: string path leading to the folder with transcript files or .npy trascript file
+
+        :return Dict["folder/file_name":Tuple[List[labels], List[path_to_files]]]
+        """
+
+        ext = os.path.splitext(path_to_files)[1]
+
+        # if path_to_files leads to a single (.npy) file , load only the one file
+        if ext == ".npy":
+            key = os.path.splitext(os.path.basename(path_to_files))[0]
+            labels = {key: ([np.load(path_to_files)],
+                            [os.path.abspath(path_to_files)])}
+        elif not ext:
+            # if the path_to_files contains subfolders, load data from all subfolders
+            labels = dict()
+            path_list = []
+            subfolders = [os.path.join(path_to_files, subfolder) for subfolder in next(os.walk(path_to_files))[1]]
+
+            # if there are no subfolders in the provided path_to_files, look directly in path_to_files
+            if not subfolders:
+                subfolders.append(path_to_files)
+
+            for sub in subfolders:
+                files = [os.path.splitext(f) for f in os.listdir(sub) if
+                         os.path.isfile(os.path.join(sub, f))]
+                paths = [os.path.abspath(os.path.join(sub, ''.join(file)))
+                         for file in files if 'transcript' in file[0] and file[-1] == '.npy']
+                sublabels = [np.load(path) for path in paths]
+                labels[os.path.normpath(sub).split('\\')[-1]] = tuple(zip(sublabels, paths))
+        else:
+            raise IOError("Specified file doesn't have .npy suffix.")
+
+        return labels
+
+
 if __name__ == '__main__':
 
-    audio_folder = "./data/raw/audio/"
-    transcript_folder = "./data/raw/transcripts/"
+    audio_folder = "c:/!temp/raw_debug/audio"
+    transcript_folder = "c:/!temp/raw_debug/transcripts"
     audio_files = [os.path.join(audio_folder, f) for f in os.listdir(audio_folder)
                    if os.path.isfile(os.path.join(audio_folder, f))]
     transcript_files = [os.path.join(transcript_folder, f) for f in os.listdir(transcript_folder)
                         if os.path.isfile(os.path.join(transcript_folder, f))]
 
-    pdtsc = PDTSCLoader(audio_files, transcript_files)
-#    out = pdtsc.char2num(['chacha to je chalupa', 'achichouvej to je bolest', 'jako by se nechumelilo'])
-#    print(out)
-#    print(pdtsc.num2char(out))
-#    print(pdtsc.transcripts)
-#    print(pdtsc.char2num(['Ahoj já jsem Martin', 'To je super', 'Já taky']))
+    pdtsc = PDTSCLoader(audio_files, transcript_files, bigrams=False, repeated=False)
     pdtsc.transcripts_to_labels()
-#    print(pdtsc.labels)
-#    pdtsc.load_audio()
-#    print(pdtsc.starts[0][0])
-#    print(pdtsc.ends[0][0])
-#    print(pdtsc.tokens[0][0])
+    print(pdtsc.tokens[0][0])
     print(pdtsc.labels[0][0])
-#    print(pdtsc.audio[0][0])
+    print(pdtsc.load_audio())
 #    pdtsc.save_audio('./data/test_saved.ogg', pdtsc.audio[0][1], pdtsc.fs[0])
-    pdtsc.save_labels(folder='./data/train', exist_ok=True)
+#    pdtsc.save_labels(folder='./data/train', exist_ok=True)
 
 

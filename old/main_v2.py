@@ -4,7 +4,7 @@ import numpy as np
 
 from matplotlib import pyplot as plt
 
-from MFCC import MFCC
+from FeatureExtraction import FeatureExtractor
 from DataLoader import PDTSCLoader
 
 
@@ -49,9 +49,9 @@ def samples_for_svk(sample=0, folder='./private/images/', dpi=300):
     audio = audio[0]
     fs = fs[0]
 
-    mfcc = MFCC([audio[sample]], fs)
+    mfcc = FeatureExtractor([audio[sample]], fs, feature_type="MFSC")
     cepstra = mfcc.transform_data()
-    power_sfft = mfcc.power_sfft[0]
+    power_sfft = mfcc.power_stft[0]
     log_sum = mfcc.log_sum[0]
 
     timespan = np.arange(len(audio[sample]))/fs

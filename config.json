@@ -1,0 +1,80 @@
+{
+  "best": false,
+  "debug": false,
+  "input_format": "numpy",
+  "load_dir": "C:/!temp/MFSC_bigram_debug",
+  "save_dir": "./data/results/",
+  "do_train": true,
+  "from_checkpoint": false,
+  "checkpoint_dir": "./data/results/agent-ep_2019-0318-144925",
+
+  "num_cpu_cores": 4,
+  "parallel_iterations": 16,
+
+  "random": false,
+
+  "feature_type": "MFSC",
+  "feature_energy": true,
+  "feature_deltas": [2, 2],
+  "label_type": "bigram",
+  "bigrams_repeated": true,
+
+  "max_epochs": 100,
+  "batch_size": 8,
+  "tt_ratio": 0.9,
+  "shuffle_seed": 42,
+
+  "bucket_width": 100,
+
+  "decay_by_epochs": true,
+  "decay_by_length": false,
+  "d_by_epo_rate": 0.5,
+  "d_by_epo_steps": 10,
+  "d_by_len_rate": 0.01,
+  "d_by_len_steps": 3000,
+
+  "cepstrum_pad_val": 0.0,
+  "label_pad_val": -1,
+
+  "conv_switch": false,
+  "conv_filter_dims": [[11, 21], [11, 11], [11, 11]],
+  "conv_strides": [[1, 2], [1, 2], [1, 2]],
+  "conv_in_channels": [1, 32, 32],
+  "conv_out_channels": [32, 32, 32],
+  "conv_dilations": [[1, 1], [1, 1], [1, 1]],
+  "conv_padding": "SAME",
+  "conv_batch_norm": true,
+
+  "ff_switch": true,
+  "ff_num_hidden": [2048, 2048, 1024],
+  "ff_dropout": [0.2, 0.2, 0.1],
+  "ff_batch_norm": true,
+  "relu_clip": 20,
+
+  "rnn_num_hidden": [256, 256],
+  "rnn_use_peephole": true,
+  "rnn_batch_norm": false,
+
+  "dropout_probs": [0.0, 0.0, 0.0],
+
+  "ctc_collapse_repeated": true,
+  "ctc_merge_repeated": true,
+  "beam_width": 128,
+  "top_paths": 1,
+
+  "optimizer_choice": "amsgrad",
+  "lr": 0.1,
+  "epsilon": 0.1,
+  "grad_clip": "global_norm",
+  "grad_clip_val": 10,
+
+  "show_device_placement": false,
+  "print_batch_x": false,
+  "print_conv": false,
+  "print_dropout": false,
+  "print_rnn_outputs": false,
+  "print_lr": false,
+  "print_gradients": false,
+  "print_grad_norm": false,
+  "print_labels": false
+}

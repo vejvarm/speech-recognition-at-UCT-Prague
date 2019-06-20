@@ -1,10 +1,11 @@
 # helper functions for this project
-import numpy as np
-
-from tensorflow.python.client import device_lib
-
 import random
 import json
+
+import numpy as np
+import soundfile as sf  # for loading audio in various formats (OGG, WAV, FLAC, ...)
+
+from tensorflow.python.client import device_lib
 
 
 def load_config(config):
@@ -20,6 +21,7 @@ def load_config(config):
     else:
         print("The config file is not a dictionary or a string with path to json file.")
         return False
+
 
 def check_equal(iterator):
     """check if all elements in an iterator are equal
@@ -46,9 +48,10 @@ def random_shuffle(iter1, iter2, seed=0):
     return zip(*list_zip)
 
 
-def list_to_padded_array(data_list):
+def list_to_padded_array(data_list, max_length=None):
     """convert input list of data into consistent shape numpy array (padded with zeros to max_length)"""
-    max_length = max(elem.shape[0] for elem in data_list)
+    if not max_length:
+        max_length = max(elem.shape[0] for elem in data_list)
     return np.array([np.pad(elem, ((0, max_length - elem.shape[0]), *((0, 0), )*(elem.ndim-1)), mode="constant")
                      for elem in data_list])
 
@@ -68,4 +71,23 @@ def get_available_devices():
     return devices
 
 
+def extract_channel(signal, channel_number):
+    """Extract single channel from a multi-channel (stereo) audio signal"""
+    try:
+        return signal[:, channel_number]
+    except IndexError:
+        return signal
+
+
+# TODO: load directly from microphone
+def load_speech(audiofile):
+    """ load audiofile from disk
+
+    :param audiofile: (str) path to audiofile
+    :return: (Tuple[ndarray[float64], int]) numpy array with audiosignal and its sample rate
+    """
+    signal, fs = sf.read(audiofile)
+    signal = extract_channel(signal, 0)  # convert signal from stereo to mono by extracting channel 0
+
+    return signal, fs
 

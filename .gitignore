@@ -32,3 +32,5 @@ MNIST_data/
 *.wdata
 
 data/results/
+
+data/results_backup/

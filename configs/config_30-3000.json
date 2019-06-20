@@ -1,0 +1,55 @@
+{
+  "best": false,
+  "debug": false,
+  "load_dir": "D:/!temp/train_deltas_min_30_max_3000",
+  "save_dir": "./data/results/",
+  "do_train": true,
+  "from_checkpoint": false,
+  "checkpoint_dir": "./data/results",
+
+  "num_cpu_cores": 8,
+  "parallel_iterations": 8,
+
+  "random": false,
+
+  "lr": 0.001,
+  "max_epochs": 1000,
+  "batch_size": 12,
+  "tt_ratio": 0.95,
+  "shuffle_seed": null,
+
+  "decay_by_epochs": true,
+  "decay_by_length": false,
+  "d_by_epo_rate": 0.95,
+  "d_by_epo_steps": 10,
+  "d_by_len_rate": 0.01,
+  "d_by_len_steps": 3000,
+
+  "cepstrum_pad_val": 0.0,
+  "label_pad_val": -1,
+
+  "mfcc_deltas": [2, 2],
+
+  "ff_num_hidden": [2048, 2048, 1024],
+  "ff_dropout": [0.2, 0.2, 0.2],
+  "ff_batch_norm": true,
+  "relu_clip": 20,
+  "rnn_num_hidden": [256, 256],
+  "rnn_use_peephole": true,
+  "ctc_collapse_repeated": true,
+  "ctc_merge_repeated": true,
+  "beam_width": 128,
+  "top_paths": 1,
+  "grad_clip": "local_norm",
+  "grad_clip_val": 1000,
+
+  "show_device_placement": false,
+  "print_batch_x": false,
+  "print_layer_3": false,
+  "print_dropout": false,
+  "print_rnn_outputs": false,
+  "print_lr": true,
+  "print_gradients": false,
+  "print_grad_norm": false,
+  "print_labels": false
+}
