@@ -16,7 +16,7 @@
   "feature_type": "MFSC",
   "feature_energy": true,
   "feature_deltas": [2, 2],
-  "label_type": "bigram",
+  "label_type": "unigram",
   "bigrams_repeated": true,
 
   "max_epochs": 100,

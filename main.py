@@ -27,15 +27,15 @@ from models.AcousticModel import AcousticModel
 # TODO: https://www.tensorflow.org/api_docs/python/tf/custom_gradient
 # TODO: cyclic learning rate
 if __name__ == '__main__':
-    config_path = "./config.json"
-    audiofile = "./data/dobry_den.wav"
+    config_path = "d:/!private/Lord/Git/speech_recognition/data/results/03_convolutions/MFSC/rnn/cer[0.37]_2019-0422-232515_conv[64-128-256](bn_dp[0.1])_rnn[512-512]/config.json"
+    audiofile = "d:/!private/Lord/Git/speech_recognition/data/results/best_so_far/"
     num_repeats = 1
 
     for _ in range(num_repeats):
         ac_model = AcousticModel(config_path)
 
-        ac_model.train(save_every=1)
+        # ac_model.train(save_every=1)
         # t = time.time()
-        # ac_model.infer(audiofile)
+        ac_model.infer(audiofile)
         # print(time.time() - t)
 

@@ -1,3 +1,4 @@
+pysndfx
 bs4
 matplotlib
 numpy
